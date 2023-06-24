@@ -3,7 +3,7 @@
 # Licensed under the MIT License.
 # --------------------------------------------------------------------------
 import torch
-from diffusers import AutoencoderKL, UNet2DConditionModel
+from diffusers import AutoencoderKL, UNet2DConditionModel, ControlNetModel
 from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
 from huggingface_hub import model_info
 from transformers.models.clip.modeling_clip import CLIPTextModel
@@ -125,6 +125,34 @@ def text_encoder_conversion_inputs(model):
 def text_encoder_data_loader(data_dir, batchsize):
     return RandomDataLoader(text_encoder_inputs, batchsize, torch.int32)
 
+
+# -----------------------------------------------------------------------------
+# CONTROLNET
+# -----------------------------------------------------------------------------
+
+
+def controlnet_inputs(batchsize, torch_dtype):
+    return {
+        "sample": torch.rand((batchsize, 4, 64, 64), dtype=torch_dtype),
+        "timestep": torch.rand((batchsize,), dtype=torch_dtype),
+        "encoder_hidden_states": torch.rand((batchsize, 77, 768), dtype=torch_dtype),
+        "controlnet_cond": torch.rand((batchsize, 3, 512, 512), dtype=torch_dtype),
+        "conditioning_scale": 1.0,
+        "return_dict": False,
+    }
+
+
+def controlnet_load(model_name):
+    model = ControlNetModel.from_pretrained(model_name)
+    return model
+
+
+def controlnet_conversion_inputs(model):
+    return tuple(controlnet_inputs(1, torch.float32).values())
+
+
+def controlnet_data_loader(data_dir, batchsize):
+    return RandomDataLoader(controlnet_inputs, batchsize, torch.float16)
 
 # -----------------------------------------------------------------------------
 # UNET
