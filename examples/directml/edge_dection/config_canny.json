@@ -1,0 +1,66 @@
+{
+    "input_model": {
+        "type": "PyTorchModel",
+        "config": {
+            "model_path": "",
+            "model_loader": "canny_load",
+            "model_script": "user_script.py",
+            "io_config": {
+                "input_names": [ "img" ],
+                "output_names": [ "thin_edges" ],
+                "dynamic_axes": {
+                    "img": {"0": "batch", "1": "channels", "2": "height", "3": "width"}
+                }
+            },
+            "dummy_inputs_func": "canny_conversion_inputs"
+        }
+    },
+    "systems": {
+        "local_system": {
+            "type": "LocalSystem",
+            "config": {
+                "accelerators": ["gpu"]
+            }
+        }
+    },
+    "evaluators": {
+        "common_evaluator": {
+            "metrics": [
+                {
+                    "name": "latency",
+                    "type": "latency",
+                    "sub_types": [{"name": "avg"}],
+                    "user_config": {
+                        "user_script": "user_script.py",
+                        "dataloader_func": "canny_data_loader",
+                        "batch_size": 2
+                    }
+                }
+            ]
+        }
+    },
+    "passes": {
+        "convert": {
+            "type": "OnnxConversion",
+            "config": {
+                "target_opset": 14,
+                "save_as_external_data": true,
+                "all_tensors_to_one_file": true,
+                "external_data_name": "weights.pb"
+            }
+        }
+    },
+    "engine": {
+        "search_strategy": {
+            "execution_order": "joint",
+            "search_algorithm": "exhaustive"
+        },
+        "evaluator": "common_evaluator",
+        "host": "local_system",
+        "target": "local_system",
+        "cache_dir": "cache",
+        "output_name": "canny",
+        "output_dir": "footprints",
+        "execution_providers": ["DmlExecutionProvider"]
+    }
+}
