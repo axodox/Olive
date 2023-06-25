@@ -6,10 +6,11 @@ import torch
 from typing import Union, Optional, Tuple
 from diffusers import AutoencoderKL, UNet2DConditionModel, ControlNetModel
 from diffusers.models.unet_2d_condition import UNet2DConditionOutput
+from diffusers.models.controlnet import ControlNetOutput, BaseOutput as ControlNetBaseOutput
 from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
 from huggingface_hub import model_info
 from transformers.models.clip.modeling_clip import CLIPTextModel
-
+from dataclasses import dataclass
 
 # Helper latency-only dataloader that creates random tensors with no label
 class RandomDataLoader:
@@ -132,6 +133,64 @@ def text_encoder_data_loader(data_dir, batchsize):
 # CONTROLNET
 # -----------------------------------------------------------------------------
 
+@dataclass
+class PatchedControlNetOutput(ControlNetBaseOutput):
+    down_block_0_additional_residual: torch.Tensor
+    down_block_1_additional_residual: torch.Tensor
+    down_block_2_additional_residual: torch.Tensor
+
+    down_block_3_additional_residual: torch.Tensor
+    down_block_4_additional_residual: torch.Tensor
+    down_block_5_additional_residual: torch.Tensor
+
+    down_block_6_additional_residual: torch.Tensor
+    down_block_7_additional_residual: torch.Tensor
+    down_block_8_additional_residual: torch.Tensor
+
+    down_block_9_additional_residual: torch.Tensor
+    down_block_10_additional_residual: torch.Tensor
+    down_block_11_additional_residual: torch.Tensor
+
+    mid_block_additional_residual: torch.Tensor
+
+class PatchedControlNetModel(ControlNetModel):
+    def forward(
+        self,
+        sample: torch.FloatTensor,
+        timestep: Union[torch.Tensor, float, int],
+        encoder_hidden_states: torch.Tensor,
+        controlnet_cond: torch.FloatTensor,
+        conditioning_scale: float,
+    ) -> Union[PatchedControlNetOutput, Tuple]:
+        (down_block_res_samples, mid_block_res_sample) = super().forward(
+            sample = sample,
+            timestep = timestep,
+            encoder_hidden_states = encoder_hidden_states,
+            controlnet_cond = controlnet_cond,
+            conditioning_scale = conditioning_scale,
+            return_dict = False
+        )
+
+        return PatchedControlNetOutput(
+            down_block_0_additional_residual = down_block_res_samples[0],
+            down_block_1_additional_residual = down_block_res_samples[1],
+            down_block_2_additional_residual = down_block_res_samples[2],
+
+            down_block_3_additional_residual = down_block_res_samples[3],
+            down_block_4_additional_residual = down_block_res_samples[4],
+            down_block_5_additional_residual = down_block_res_samples[5],
+
+            down_block_6_additional_residual = down_block_res_samples[6],
+            down_block_7_additional_residual = down_block_res_samples[7],
+            down_block_8_additional_residual = down_block_res_samples[8],
+
+            down_block_9_additional_residual = down_block_res_samples[9],
+            down_block_10_additional_residual = down_block_res_samples[10],
+            down_block_11_additional_residual = down_block_res_samples[11],
+
+            mid_block_additional_residual = mid_block_res_sample
+        )
+
 
 def controlnet_inputs(batchsize, torch_dtype):
     return {
@@ -139,13 +198,12 @@ def controlnet_inputs(batchsize, torch_dtype):
         "timestep": torch.rand((batchsize,), dtype=torch_dtype),
         "encoder_hidden_states": torch.rand((batchsize, 77, 768), dtype=torch_dtype),
         "controlnet_cond": torch.rand((batchsize, 3, 512, 512), dtype=torch_dtype),
-        "conditioning_scale": 1.0,
-        "return_dict": False,
+        "conditioning_scale": 1.0
     }
 
 
 def controlnet_load(model_name):
-    model = ControlNetModel.from_pretrained(model_name)
+    model = PatchedControlNetModel.from_pretrained(model_name)
     return model
 
 
@@ -160,26 +218,25 @@ def controlnet_data_loader(data_dir, batchsize):
 # CONTROLNET - UNET
 # -----------------------------------------------------------------------------
 
-class UNet2DConditionModel_ControlNet(UNet2DConditionModel):
+class PatchedUNet2DConditionModel(UNet2DConditionModel):
     def forward(
         self,
         sample: torch.FloatTensor,
         timestep: Union[torch.Tensor, float, int],
         encoder_hidden_states: torch.Tensor,
-        down_block_0_additional_residual: Optional[torch.Tensor] = None,
-        down_block_1_additional_residual: Optional[torch.Tensor] = None,
-        down_block_2_additional_residual: Optional[torch.Tensor] = None,
-        down_block_3_additional_residual: Optional[torch.Tensor] = None,
-        down_block_4_additional_residual: Optional[torch.Tensor] = None,
-        down_block_5_additional_residual: Optional[torch.Tensor] = None,
-        down_block_6_additional_residual: Optional[torch.Tensor] = None,
-        down_block_7_additional_residual: Optional[torch.Tensor] = None,
-        down_block_8_additional_residual: Optional[torch.Tensor] = None,
-        down_block_9_additional_residual: Optional[torch.Tensor] = None,
-        down_block_10_additional_residual: Optional[torch.Tensor] = None,
-        down_block_11_additional_residual: Optional[torch.Tensor] = None,
-        mid_block_additional_residual: Optional[torch.Tensor] = None,
-        return_dict: bool = False,
+        down_block_0_additional_residual: torch.Tensor,
+        down_block_1_additional_residual: torch.Tensor,
+        down_block_2_additional_residual: torch.Tensor,
+        down_block_3_additional_residual: torch.Tensor,
+        down_block_4_additional_residual: torch.Tensor,
+        down_block_5_additional_residual: torch.Tensor,
+        down_block_6_additional_residual: torch.Tensor,
+        down_block_7_additional_residual: torch.Tensor,
+        down_block_8_additional_residual: torch.Tensor,
+        down_block_9_additional_residual: torch.Tensor,
+        down_block_10_additional_residual: torch.Tensor,
+        down_block_11_additional_residual: torch.Tensor,
+        mid_block_additional_residual: torch.Tensor,
     ) -> Union[UNet2DConditionOutput, Tuple]:
         down_block_add_res = (
             down_block_0_additional_residual, down_block_1_additional_residual, down_block_2_additional_residual,
@@ -192,7 +249,7 @@ class UNet2DConditionModel_ControlNet(UNet2DConditionModel):
             encoder_hidden_states = encoder_hidden_states,
             down_block_additional_residuals = down_block_add_res,
             mid_block_additional_residual = mid_block_additional_residual,
-            return_dict = return_dict
+            return_dict = False
         )
 
 def controlnet_unet_inputs(batchsize, torch_dtype):
@@ -218,7 +275,7 @@ def controlnet_unet_inputs(batchsize, torch_dtype):
 
 def controlnet_unet_load(model_name):
     base_model_id = get_base_model_name(model_name)
-    model = UNet2DConditionModel_ControlNet.from_pretrained(base_model_id, subfolder="unet")
+    model = PatchedUNet2DConditionModel.from_pretrained(base_model_id, subfolder="unet")
     return model
 
 
