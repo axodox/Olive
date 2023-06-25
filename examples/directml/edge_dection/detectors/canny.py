@@ -129,9 +129,9 @@ class CannyFilter(nn.Module):
             self.hysteresis.weight[:] = torch.from_numpy(hysteresis)
 
 
-    def forward(self, img, low_threshold=None, high_threshold=None, hysteresis=False):
+    def forward(self, input, low_threshold=None, high_threshold=None, hysteresis=False):
         # set the setps tensors
-        B, C, H, W = img.shape
+        B, C, H, W = input.shape
         blurred = torch.zeros((B, C, H, W)).to(self.device)
         grad_x = torch.zeros((B, 1, H, W)).to(self.device)
         grad_y = torch.zeros((B, 1, H, W)).to(self.device)
@@ -141,7 +141,7 @@ class CannyFilter(nn.Module):
         # gaussian
 
         for c in range(C):
-            blurred[:, c:c+1] = self.gaussian_filter(img[:, c:c+1])
+            blurred[:, c:c+1] = self.gaussian_filter(input[:, c:c+1])
 
             grad_x = grad_x + self.sobel_filter_x(blurred[:, c:c+1])
             grad_y = grad_y + self.sobel_filter_y(blurred[:, c:c+1])
@@ -198,4 +198,5 @@ class CannyFilter(nn.Module):
 
 
         #return blurred, grad_x, grad_y, grad_magnitude, grad_orientation, thin_edges
-        return thin_edges
+        output = thin_edges
+        return output
