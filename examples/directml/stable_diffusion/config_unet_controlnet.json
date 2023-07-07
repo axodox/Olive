@@ -2,7 +2,7 @@
   "input_model": {
       "type": "PyTorchModel",
       "config": {
-          "model_path": "runwayml/stable-diffusion-v1-5",
+          "model_path": "SG161222/Realistic_Vision_V1.4",
           "model_storage_kind": "folder",
           "model_loader": "controlnet_unet_load",
           "model_script": "user_script.py",

@@ -2,7 +2,7 @@
     "input_model": {
         "type": "PyTorchModel",
         "config": {
-            "model_path": "lllyasviel/sd-controlnet-depth",
+            "model_path": "lllyasviel/sd-controlnet-seg",
             "model_storage_kind": "folder",
             "model_loader": "controlnet_load",
             "model_script": "user_script.py",
