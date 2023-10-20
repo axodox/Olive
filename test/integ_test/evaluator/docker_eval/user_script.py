@@ -11,22 +11,27 @@ def post_process(res):
     return res.argmax(1)
 
 
-def create_dataloader(data_dir, batch_size):
+def create_dataloader(data_dir, batch_size, *args, **kwargs):
     dataset = datasets.MNIST(data_dir, transform=ToTensor())
     return torch.utils.data.DataLoader(dataset, batch_size)
 
 
 def openvino_post_process(res):
-    res = list(res.values())[0]
+    res = next(iter(res.values()))
     return res.argmax(1)
 
 
 def hf_post_process(res):
-    _, preds = torch.max(res[0], dim=1)
+    import transformers
+
+    if isinstance(res, transformers.modeling_outputs.SequenceClassifierOutput):
+        _, preds = torch.max(res.logits, dim=1)
+    else:
+        _, preds = torch.max(res, dim=1)
     return preds
 
 
-def create_hf_dataloader(data_dir, batch_size):
+def create_hf_dataloader(data_dir, batch_size, *args, **kwargs):
     from datasets import load_dataset
     from torch.utils.data import Dataset
     from transformers import AutoTokenizer

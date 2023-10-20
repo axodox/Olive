@@ -7,17 +7,20 @@ from typing import Callable, List, Union
 
 from pydantic import validator
 
-from olive.common.config_utils import ConfigBase, ConfigParam, create_config_class
+from olive.common.config_utils import ConfigBase, ConfigParam, ParamCategory, create_config_class
+from olive.resource_path import OLIVE_RESOURCE_ANNOTATIONS
 
 WARMUP_NUM = 10
 REPEAT_TEST_NUM = 20
 SLEEP_NUM = 0
 
-
+user_path_config = ["data_dir"]
 _common_user_config = {
     "script_dir": ConfigParam(type_=Union[Path, str]),
     "user_script": ConfigParam(type_=Union[Path, str]),
-    "data_dir": ConfigParam(type_=Union[Path, str]),
+    "inference_settings": ConfigParam(type_=dict),
+    "data_dir": ConfigParam(type_=OLIVE_RESOURCE_ANNOTATIONS, category=ParamCategory.DATA),
+    "dataloader_func": ConfigParam(type_=Union[Callable, str], category=ParamCategory.OBJECT),
     "batch_size": ConfigParam(type_=int, default_value=1),
     "input_names": ConfigParam(type_=List),
     "input_shapes": ConfigParam(type_=List),
@@ -28,17 +31,14 @@ _common_user_config_validators = {}
 
 _type_to_user_config = {
     "latency": {
-        "dataloader_func": ConfigParam(type_=Union[Callable, str], is_object=True),
-        "inference_settings": ConfigParam(type_=dict),
         "io_bind": ConfigParam(type_=bool, default_value=False),
     },
     "accuracy": {
-        "dataloader_func": ConfigParam(type_=Union[Callable, str], is_object=True),
-        "post_processing_func": ConfigParam(type_=Union[Callable, str], is_object=True),
-        "inference_settings": ConfigParam(type_=dict),
+        "post_processing_func": ConfigParam(type_=Union[Callable, str], category=ParamCategory.OBJECT),
     },
     "custom": {
-        "evaluate_func": ConfigParam(type_=Union[Callable, str], required=True, is_object=True),
+        "evaluate_func": ConfigParam(type_=Union[Callable, str], required=False, category=ParamCategory.OBJECT),
+        "metric_func": ConfigParam(type_=Union[Callable, str], required=False, category=ParamCategory.OBJECT),
     },
 }
 
@@ -53,13 +53,13 @@ def get_user_config_class(metric_type: str):
     return create_config_class(f"{metric_type.title()}UserConfig", default_config, ConfigBase, validators)
 
 
-def get_properties_from_metric_type(metric_type):
+def get_user_config_properties_from_metric_type(metric_type):
     user_config_class = get_user_config_class(metric_type)
     # avoid to use schema() to get the fields, because it will skip the ones with object type
     return list(user_config_class.__fields__)
 
 
-# TODO: automate latency metric config also we standardize accuracy metric config
+# TODO(jambayk): automate latency metric config also we standardize accuracy metric config
 class LatencyMetricConfig(ConfigBase):
     warmup_num: int = WARMUP_NUM
     repeat_test_num: int = REPEAT_TEST_NUM
@@ -67,7 +67,7 @@ class LatencyMetricConfig(ConfigBase):
 
 
 class MetricGoal(ConfigBase):
-    type: str  # threshold , deviation, percent-deviation
+    type: str  # threshold , deviation, percent-deviation, # noqa: A003
     value: float
 
     @validator("type")

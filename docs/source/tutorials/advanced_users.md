@@ -1,7 +1,6 @@
-(Advanced-user-tour)=
 # Advanced User Tour
 
-Olive provides simple  Python and command line interface to optimize the input model. See [Quick Tour](Quick-tour) for more information.
+Olive provides simple  Python and command line interface to optimize the input model. See [Quick Tour](../overview/quicktour.md) for more information.
 ```bash
 python -m olive.workflows.run --config user_provided_info.json
 ```
@@ -16,26 +15,29 @@ approach may not take advantage of all the features supported by standard Olive 
 
 Now, let's take a look at how you can use advance Python interface.
 
-### Input Model
+## Input Model
 Start by creating an instance of an OliveModel to represent the model to be optimized. Depending on the model framework, the
 model can be loaded from file or using a model loader function. For a complete of available models and their initialization options, refer to [OliveModels api reference](models).
 
 ```python
-from olive.models import PytorchModel, ModelStorageKind
+from olive.models import Modelconfig
 
-input_model = PyTorchModel(
-    model_path="resnet.pt",
-    model_storage_kind=ModelStorageKind.LocalFile,
-    io_config={
-        "input_names": ["input"],
-        "input_shapes": [[1, 3, 32, 32]],
-        "output_names": ["output"],
-        "dynamic_axes": {"input": {0: "batch_size"}, "output": {0: "batch_size"}}
+config = {
+    "type": "PyTorchModel",
+    "config": {
+        "model_path": "resnet.pt",
+        "io_config": {
+            "input_names": ["input"],
+            "input_shapes": [[1, 3, 32, 32]],
+            "output_names": ["output"],
+            "dynamic_axes": {"input": {0: "batch_size"}, "output": {0: "batch_size"}},
+        }
     }
-)
+}
+input_model = ModelConfig.parse_obj(config)
 ```
 
-### Host and Target Systems
+## Host and Target Systems
 An optimization technique, which we call a Pass, can be run on a variety of **host** systems and the resulting model evaluated
 on desired **target** systems. More details for the available systems can be found at [OliveSystems api reference](systems).
 
@@ -47,7 +49,7 @@ from olive.systems.local import LocalSystem
 local_system = LocalSystem()
 ```
 
-### Evaluator
+## Evaluator
 In order to chose the set of Pass configuration parameters that lead to the "best" model, Olive requires an evaluator that
 returns metrics values for each output model.
 
@@ -76,15 +78,15 @@ latency_metric = Metric(
 evaluator_config =  OliveEvaluatorConfig(metrics=[latency_metric])
 ```
 
-`latency_metric` requires you to provide a function as value for `dataloader_func` that returns a dataloader object when called on `data_dir` and `batch_size`. You can provide the function object directly but here, let's give it a function name `"create_dataloader"` that can be imported from `user_script`.
+`latency_metric` requires you to provide a function as value for `dataloader_func` that returns a dataloader object when called on `data_dir`, `batch_size`, optional positional argument list and keyword argument dictionary. You can provide the function object directly but here, let's give it a function name `"create_dataloader"` that can be imported from `user_script`.
 
-[This file](https://github.com/microsoft/Olive/blob/main/examples/resnet_ptq_cpu/user_script.py) for
+[This file](https://github.com/microsoft/Olive/blob/main/examples/resnet/user_script.py) for
 has an example of how to write user scripts.
 <!-- Refer to [User Scripts and Script Dir]() for more details on how Olive handles user scripts. -->
 
 You can provide more than one metric to the evaluator `metrics` list.
 
-### Engine
+## Engine
 You are now ready create the engine which handles the auto-tuning process.
 
 ```python
@@ -102,7 +104,7 @@ engine_config = {
 engine = Engine(engine_config, evaluator_config=evaluator_config, host=local_system)
 ```
 
-### Register Passes
+## Register Passes
 The engine has now been created. You need to register the Passes that you want to apply on the input model. In this example,
 let us first convert the pytorch model to ONNX and quantize it. More information about the
 Passes available in Olive can be found at ...
@@ -128,7 +130,7 @@ quantization_config = {
 engine.register(OnnxQuantization, quantization_config, False)
 ```
 
-### Run the engine
+## Run the engine
 Finally, run the engine on your input model. The output will be the best set of parameters for the passes and the output
 model. Note: the engine run result will be updated soon.
 

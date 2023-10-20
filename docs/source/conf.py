@@ -1,8 +1,14 @@
+# -------------------------------------------------------------------------
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
+# --------------------------------------------------------------------------
 import os
 import sys
 
 import sphinx_rtd_theme
 
+# ruff: noqa
+# pylint: skip-file
 sys.path.append(os.path.abspath("exts"))
 # Configuration file for the Sphinx documentation builder.
 #
@@ -39,6 +45,10 @@ extensions = [
     "sphinxcontrib.jquery",
 ]
 
+myst_enable_extensions = [
+    "html_image",
+]
+
 source_suffix = {
     ".rst": "restructuredtext",
     ".txt": "markdown",
@@ -48,6 +58,7 @@ source_suffix = {
 templates_path = ["_templates"]
 exclude_patterns = []
 
+suppress_warnings = ["myst.xref_missing"]
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
@@ -57,6 +68,9 @@ html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
 html_static_path = ["_static"]
 html_css_files = [
     "css/width.css",
+]
+html_js_files = [
+    "js/custom_version.js",
 ]
 
 # The name of the Pygments (syntax highlighting) style to use.
@@ -71,3 +85,12 @@ autodoc_pydantic_settings_show_validator_members = False
 autodoc_pydantic_settings_show_field_summary = False
 autodoc_pydantic_settings_show_json = False
 autodoc_pydantic_field_list_validators = False
+autodoc_pydantic_settings_member_order = "bysource"  # is groupwise and alphabetical otherwise
+
+# disable the anchor check since https://github.com/sphinx-doc/sphinx/issues/9016
+# we could enable it when the issue is fixed
+linkcheck_anchors = False
+linkcheck_ignore = [
+    # TODO(trajep): remove this when the issue is fixed
+    r"https://developer.qualcomm.com/*",
+]

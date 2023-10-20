@@ -5,12 +5,13 @@
 import inspect
 import json
 import logging
+from enum import Enum
 from functools import partial
 from pathlib import Path
 from types import FunctionType, MethodType
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, Union
 
-from pydantic import BaseModel, create_model, validator
+from pydantic import BaseModel, Field, create_model, root_validator, validator
 
 from olive.common.utils import hash_function, hash_object
 
@@ -18,9 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 def serialize_function(function: Union[FunctionType, MethodType]) -> dict:
-    """
-    Serialize a function into a dictionary.
-    """
+    """Serialize a function into a dictionary."""
     return {
         "olive_parameter_type": "Function",
         "name": function.__name__,
@@ -30,9 +29,7 @@ def serialize_function(function: Union[FunctionType, MethodType]) -> dict:
 
 
 def serialize_object(obj: Any) -> dict:
-    """
-    Serialize an object into a dictionary.
-    """
+    """Serialize an object into a dictionary."""
     return {
         "olive_parameter_type": "Object",
         "type": type(obj).__name__,
@@ -46,7 +43,7 @@ def _expanded_default(custom_default: Callable[[Any], Any], obj: Any) -> Any:
             return custom_default(obj)
         except TypeError:
             pass
-    if isinstance(obj, FunctionType) or isinstance(obj, MethodType):
+    if isinstance(obj, (FunctionType, MethodType)):
         return serialize_function(obj)
     if isinstance(obj, Path):
         return str(obj.resolve())
@@ -56,39 +53,35 @@ def _expanded_default(custom_default: Callable[[Any], Any], obj: Any) -> Any:
 
 
 def config_json_dumps(obj: Any, default: Callable[[Any], Any] = None, **kwargs) -> str:
-    """
-    Serialize a Python object into a JSON string. Also serializes functions and objects.
-    """
+    """Serialize a Python object into a JSON string. Also serializes functions and objects."""
     default = partial(_expanded_default, default)
     return json.dumps(obj, default=default, **kwargs)
 
 
 def _expanded_object_hook(custom_object_hook: Callable[[dict], Any], obj: dict) -> Any:
     if obj.get("olive_parameter_type") in ["Function", "Object"]:
-        type = obj.get("type", obj.get("olive_parameter_type"))
-        raise ValueError(f"Cannot load a {type} from JSON. Replace {type} with user_script and name string.")
+        param_type = obj.get("type", obj.get("olive_parameter_type"))
+        raise ValueError(
+            f"Cannot load a {param_type} from JSON. Replace {param_type} with user_script and name string."
+        )
     if custom_object_hook is None:
         return obj
     return custom_object_hook(obj)
 
 
 def config_json_loads(s: Union[str, bytes, bytearray], *, object_hook: Callable[[dict], Any] = None, **kwargs) -> Any:
-    """
-    Deserialize a JSON string into a Python object.
-    """
+    """Deserialize a JSON string into a Python object."""
     object_hook = partial(_expanded_object_hook, object_hook)
     return json.loads(s, object_hook=object_hook, **kwargs)
 
 
-def serialize_to_json(obj: Any, check_objects: bool = False) -> dict:
-    """
-    Serialize a Python object into a JSON dict. Also serializes functions and objects.
-    """
+def serialize_to_json(obj: Any, check_object: bool = False) -> dict:
+    """Serialize a Python object into a JSON dict. Also serializes functions and objects."""
     if isinstance(obj, BaseModel):
         raw_json = obj.json()
     else:
         raw_json = config_json_dumps(obj)
-    if check_objects:
+    if check_object:
         try:
             config_json_loads(raw_json)
         except ValueError as e:
@@ -96,7 +89,7 @@ def serialize_to_json(obj: Any, check_objects: bool = False) -> dict:
             if "user_script" in e:
                 e = e.replace("Cannot load", "Cannot serialize")
                 e = e.replace("from JSON", "to JSON")
-            raise ValueError(e)
+            raise ValueError(e) from None
     return json.loads(raw_json)
 
 
@@ -105,10 +98,10 @@ class ConfigBase(BaseModel):
         arbitrary_types_allowed = True
         json_loads = config_json_loads
         json_dumps = config_json_dumps
-        json_encoders = {Path: lambda x: str(x.resolve())}
+        json_encoders = {Path: lambda x: str(x.resolve())}  # noqa: RUF012
 
-    def to_json(self, check_objects: bool = False) -> dict:
-        return serialize_to_json(self, check_objects)
+    def to_json(self, check_object: bool = False) -> dict:
+        return serialize_to_json(self, check_object)
 
     @classmethod
     def from_json(cls, json_dict: dict) -> "ConfigBase":
@@ -116,7 +109,7 @@ class ConfigBase(BaseModel):
 
 
 class ConfigListBase(ConfigBase):
-    __root__: List[Any] = None
+    __root__: List[Any]
 
     def __iter__(self):
         return iter(self.__root__)
@@ -129,7 +122,7 @@ class ConfigListBase(ConfigBase):
 
 
 class ConfigDictBase(ConfigBase):
-    __root__: Dict[str, Any] = None
+    __root__: Dict[str, Any]
 
     def __iter__(self):
         return iter(self.__root__)
@@ -150,20 +143,75 @@ class ConfigDictBase(ConfigBase):
         return len(self.__root__) if self.__root__ else 0
 
 
+class ConfigWithExtraArgs(ConfigBase):
+    """Config class that automatically gathers all values.
+
+    The values are not defined in the class fields and inserted into a dict Field called `extra_args`.
+    """
+
+    extra_args: Dict = Field(
+        None,
+        description=(
+            "Dictionary of extra arguments that are not defined in the class fields. Values can be provided in two"
+            " ways: 1. As a dict value to `extra_args` key. 2. As keyword arguments to the class constructor. Any"
+            " values provided as keyword arguments will be added to the `extra_args` dict. `extra_args` values take"
+            " precedence over keyword arguments if the same key is provided in both."
+        ),
+    )
+
+    @root_validator(pre=True)
+    def gather_extra_args(cls, values):
+        other_fields = set()
+        for field in cls.__fields__.values():
+            for name in (field.name, field.alias):
+                if name != "extra_args":
+                    other_fields.add(name)
+
+        extra_args = values.pop("extra_args", {}) or {}
+        # ensure that extra_args does not contain any field names
+        for name in list(extra_args):  # need a copy of the keys since we are mutating the dict
+            if name in other_fields:
+                logger.warning(
+                    f"'{name}' provided to 'extra_args' is already defined in the class fields. Please provide the"
+                    " value directly to the field. Ignoring."
+                )
+                del extra_args[name]
+        # put any values provided as keyword arguments into extra_args
+        for name in list(values):  # need a copy of the keys since we are mutating the dict
+            if name in other_fields:
+                continue
+            if name in extra_args:
+                # extra_args takes precedence over keyword arguments
+                logger.warning(f"kwarg '{name}' is already defined in 'extra_args'. Ignoring.")
+            else:
+                extra_args[name] = values.pop(name)
+        if extra_args:
+            values["extra_args"] = extra_args
+        return values
+
+
+class ParamCategory(str, Enum):
+    NONE = "none"
+    OBJECT = "object"
+    PATH = "path"
+    DATA = "data"
+
+    def __str__(self) -> str:
+        return self.value
+
+
 class ConfigParam(ConfigBase):
-    """
-    Dataclass for pass configuration parameters.
-    """
+    """Dataclass for pass configuration parameters."""
 
     type_: Any
     required: bool = False
     default_value: Any = None
-    is_object: bool = False
+    category: ParamCategory = ParamCategory.NONE
     description: str = None
 
     def __repr__(self):
         repr_list = []
-        booleans = ["required", "is_object"]
+        booleans = ["required"]
         for k, v in self.__dict__.items():
             if k in booleans:
                 if v:
@@ -178,7 +226,7 @@ def validate_enum(enum_class: type, value: str):
     try:
         value = enum_class(value)
     except ValueError:
-        raise ValueError(f"Invalid value '{value}'. Valid values are {[e.value for e in enum_class]}")
+        raise ValueError(f"Invalid value '{value}'. Valid values are {[e.value for e in enum_class]}") from None
     return value
 
 
@@ -191,20 +239,31 @@ def validate_object(v, values, field):
     return v
 
 
+def validate_resource_path(v, values, field):
+    from olive.resource_path import create_resource_path
+
+    try:
+        v = create_resource_path(v)
+    except ValueError as e:
+        raise ValueError(f"Invalid resource path '{v}': {e}") from None
+    return v
+
+
 def create_config_class(
     class_name: str,
     default_config: Dict[str, ConfigParam],
     base: type = ConfigBase,
     validators: Dict[str, Callable] = None,
-):
-    """
-    Create a Pydantic model class from a configuration dictionary.
-    """
+) -> Type[ConfigBase]:
+    """Create a Pydantic model class from a configuration dictionary."""
     config = {}
     validators = validators.copy() if validators else {}
     for param, param_config in default_config.items():
+        if param == "data_dir":
+            validator_name = f"validate_{param}_resource_path"
+            validators[validator_name] = validator(param, allow_reuse=True)(validate_resource_path)
         # automatically add validator for object params
-        if param_config.is_object:
+        if param_config.category == ParamCategory.OBJECT:
             validator_name = f"validate_{param}_object"
             count = 0
             while validator_name in validators:
@@ -222,14 +281,17 @@ def create_config_class(
     return create_model(class_name, **config, __base__=base, __validators__=validators)
 
 
+T = TypeVar("T", bound=ConfigBase)
+
+
 def validate_config(
     config: Union[Dict[str, Any], ConfigBase, None],
-    base_class: ConfigBase,
-    instance_class: Optional[ConfigBase] = None,
+    base_class: Type[T],
+    instance_class: Optional[Type[T]] = None,
     warn_unused_keys: bool = True,
-):
-    """
-    Validate a config dictionary or object against a base class and instance class.
+) -> T:
+    """Validate a config dictionary or object against a base class and instance class.
+
     instance class is a subclass of base class.
     """
     config = config or {}

@@ -15,6 +15,7 @@ from olive.passes.pass_config import PassConfigParam
 
 class OnnxFloatToFloat16(Pass):
     """Converts a model to float16.
+
     It is based on onnxconverter-common.convert_float_to_float16.
     See https://onnxruntime.ai/docs/performance/model-optimizations/float16.html#float16-conversion
     """
@@ -44,7 +45,9 @@ class OnnxFloatToFloat16(Pass):
         config.update(get_external_data_config())
         return config
 
-    def _run_for_config(self, model: ONNXModel, config: Dict[str, Any], output_model_path: str) -> ONNXModel:
+    def _run_for_config(
+        self, model: ONNXModel, data_root: str, config: Dict[str, Any], output_model_path: str
+    ) -> ONNXModel:
         from onnxconverter_common import float16
 
         output_model_path = ONNXModel.resolve_path(output_model_path)
@@ -63,4 +66,4 @@ class OnnxFloatToFloat16(Pass):
         )
 
         # save the model to the output path and return the model
-        return model_proto_to_olive_model(model_fp16, output_model_path, config.dict(), model.name)
+        return model_proto_to_olive_model(model_fp16, output_model_path, config.dict())

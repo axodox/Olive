@@ -1,3 +1,7 @@
+# -------------------------------------------------------------------------
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
+# --------------------------------------------------------------------------
 import logging
 import os
 import platform
@@ -11,21 +15,18 @@ logger = logging.getLogger(__name__)
 
 
 def get_snpe_root() -> str:
-    """
-    Get the SNPE root directory from the SNPE_ROOT environment variable.
-    """
+    """Get the SNPE root directory from the SNPE_ROOT environment variable."""
     try:
         snpe_root = os.environ["SNPE_ROOT"]
         logger.debug(f"SNPE_ROOT is set to {snpe_root}")
     except KeyError:
-        raise ValueError("SNPE_ROOT is not set")
+        raise ValueError("SNPE_ROOT is not set") from None
 
     return snpe_root
 
 
 def get_snpe_target_arch(fail_on_unsupported: bool = True) -> str:
-    """
-    Get the SNPE target architecture from the system and processor.
+    """Get the SNPE target architecture from the system and processor.
 
     fail_on_unsupported: Whether to raise an exception if the system or processor is not supported
     """
@@ -50,24 +51,43 @@ def get_snpe_target_arch(fail_on_unsupported: bool = True) -> str:
     return snpe_target_arch
 
 
-def get_snpe_env(dev: bool = False) -> dict:
+def get_snpe_win_arch_name(snpe_root: str, snpe_target_arch: str) -> str:
+    """Get the SNPE ARM64-Windows architecture name from the SNPE root directory.
+
+    snpe_root: The unzipped SNPE SDK directory
+    snpe_target_arch: The SNPE target architecture
     """
-    Get the SNPE environment variables.
+    if not Path(snpe_root).exists():
+        raise FileNotFoundError(f"Path {snpe_root} does not exist")
+
+    prefix_map = {"x64-Windows": "x86_64-windows-", "ARM64-Windows": "aarch64-windows-"}
+    prefix = prefix_map[snpe_target_arch]
+
+    arm_windows_archs = list(Path(snpe_root).glob(f"lib/{prefix}*"))
+    if len(arm_windows_archs) == 0:
+        raise FileNotFoundError(f"SNPE_ROOT {snpe_root} missing {prefix}*")
+
+    arm_windows_arch = arm_windows_archs[0].name
+    logger.debug(f"SNPE {snpe_target_arch} arch name: {arm_windows_arch}")
+
+    return arm_windows_arch
+
+
+def get_snpe_env(dev: bool = False) -> dict:
+    """Get the SNPE environment variables.
 
     dev: Whether to use the SNPE development environment. Only supported on x64-Linux
     """
-    target_arch_mapping = {
-        "x64-Linux": "x86_64-linux-clang",
-        "x64-Windows": "x86_64-windows-vc19",
-        "ARM64-Windows": "aarch64-windows-vc19",
-    }
+    snpe_root = get_snpe_root()
     target_arch = get_snpe_target_arch()
-    target_arch_name = target_arch_mapping[target_arch]
+    if "Linux" in target_arch:
+        target_arch_name = "x86_64-linux-clang"
+    else:
+        target_arch_name = get_snpe_win_arch_name(snpe_root, target_arch)
 
     if dev and target_arch != "x64-Linux":
         raise ValueError("SNPE development environment is only supported on x64-Linux")
 
-    snpe_root = get_snpe_root()
     bin_path = str(Path(f"{snpe_root}/bin/{target_arch_name}"))
     lib_path = str(Path(f"{snpe_root}/lib/{target_arch_name}"))
 
@@ -108,8 +128,7 @@ def get_snpe_env(dev: bool = False) -> dict:
 def run_snpe_command(
     cmd: str, dev: bool = False, runs: int = 1, sleep: int = 0, log_error: bool = True
 ) -> Tuple[str, str]:
-    """
-    Run a SNPE command.
+    """Run a SNPE command.
 
     cmd: The command to run
     dev: Whether to use the SNPE development environment. Only supported on x64-Linux

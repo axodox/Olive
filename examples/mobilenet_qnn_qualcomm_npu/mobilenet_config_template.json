@@ -2,8 +2,7 @@
     "input_model":{
         "type": "OnnxModel",
         "config": {
-            "model_path": "models/mobilenetv2-12.onnx",
-            "model_storage_kind": "file"
+            "model_path": "models/mobilenetv2-12.onnx"
         }
     },
     "evaluators": {
@@ -54,13 +53,13 @@
         "cache_dir": "cache",
         "output_dir": "models",
         "evaluator": "common_evaluator",
-        "evaluation_only": false,
+        "evaluate_input_model": false,
         "clean_cache": true,
         "target": {
             "type": "PythonEnvironment",
             "config": {
                 "python_environment_path": "<python-environment-path>",
-                "device": "npu",
+                "accelerators": ["npu"],
                 "prepend_to_path": ["<qnn-lib-path>"]
             }
         }

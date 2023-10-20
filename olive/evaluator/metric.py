@@ -2,9 +2,10 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 # --------------------------------------------------------------------------
+import json
 import logging
 from enum import Enum
-from typing import ClassVar, Dict, List, Union
+from typing import ClassVar, Dict, List, Optional, Union
 
 from pydantic import validator
 
@@ -27,7 +28,8 @@ class AccuracySubType(str, Enum):
     F1_SCORE = "f1_score"
     PRECISION = "precision"
     RECALL = "recall"
-    AUC = "auc"
+    AUROC = "auroc"
+    PERPLEXITY = "perplexity"
 
 
 class LatencySubType(str, Enum):
@@ -78,10 +80,11 @@ class SubMetric(ConfigBase):
 
 class Metric(ConfigBase):
     name: str
-    type: MetricType
+    type: MetricType  # noqa: A003
+    backend: Optional[str] = "torch_metrics"
     sub_types: List[SubMetric]
     user_config: ConfigBase = None
-    data_config: DataConfig = DataConfig()
+    data_config: Optional[DataConfig] = None
 
     def get_sub_type_info(self, info_name, no_priority_filter=True, callback=lambda x: x):
         sub_type_info = {}
@@ -90,6 +93,16 @@ class Metric(ConfigBase):
                 continue
             sub_type_info[sub_type.name] = callback(getattr(sub_type, info_name))
         return sub_type_info
+
+    @validator("backend", always=True, pre=True)
+    def validate_backend(cls, v, values):
+        if values["type"] == MetricType.CUSTOM:
+            return None
+        from olive.evaluator.metric_backend import MetricBackend
+
+        assert v in MetricBackend.registry, f"Backend {v} is not in {list(MetricBackend.registry.keys())}"
+        assert MetricBackend.registry[v]() is not None, f"Backend {v} is not available"
+        return v
 
     @validator("sub_types", always=True, pre=True, each_item=True)
     def validate_sub_types(cls, v, values):
@@ -103,25 +116,37 @@ class Metric(ConfigBase):
         # name
         sub_type_enum = AccuracySubType if values["type"] == MetricType.ACCURACY else LatencySubType
         try:
-            v["name"] = sub_type_enum(v["name"])
+            # backend joint checking
+            if values["backend"] == "huggingface_metrics":
+                import evaluate
+
+                full_sub_type = evaluate.list_evaluation_modules()
+                assert v["name"] in full_sub_type, f"{v['name']} is not in https://huggingface.co/metrics"
+            elif values["backend"] == "torch_metrics":
+                v["name"] = sub_type_enum(v["name"])
         except ValueError:
             raise ValueError(
                 f"sub_type {v['name']} is not in {list(sub_type_enum.__members__.keys())} for {values['type']} metric"
-            )
+            ) from None
 
         # metric_config
         metric_config_cls = None
         if sub_type_enum is AccuracySubType:
-            v["higher_is_better"] = True
-            metric_config_cls = AccuracyBase.registry[v["name"]].get_config_class()
+            v["higher_is_better"] = v.get("higher_is_better", True)
+            if values["backend"] == "torch_metrics":
+                metric_config_cls = AccuracyBase.registry[v["name"]].get_config_class()
+            elif values["backend"] == "huggingface_metrics":
+                from olive.evaluator.metric_backend import HuggingfaceMetrics
+
+                metric_config_cls = HuggingfaceMetrics.get_config_class()
         elif sub_type_enum is LatencySubType:
-            v["higher_is_better"] = False
+            v["higher_is_better"] = v.get("higher_is_better", False)
             metric_config_cls = LatencyMetricConfig
         v["metric_config"] = validate_config(v.get("metric_config", {}), ConfigBase, metric_config_cls)
 
         return v
 
-    @validator("user_config", pre=True)
+    @validator("user_config", pre=True, always=True)
     def validate_user_config(cls, v, values):
         if "type" not in values:
             raise ValueError("Invalid type")
@@ -137,7 +162,7 @@ class SubMetricResult(ConfigBase):
 
 
 class MetricResult(ConfigDictBase):
-    __root__: Dict[str, SubMetricResult] = None
+    __root__: Dict[str, SubMetricResult]
     delimiter: ClassVar[str] = "-"
 
     def get_value(self, metric_name, sub_type_name):
@@ -150,7 +175,7 @@ class MetricResult(ConfigDictBase):
 
     def __str__(self) -> str:
         repr_obj = {k: v.value for k, v in self.__root__.items()}
-        return f"{repr_obj}"
+        return json.dumps(repr_obj, indent=2)
 
 
 def joint_metric_key(metric_name, sub_type_name):

@@ -13,6 +13,7 @@ import numpy as np
 ort_inference_utils_parent = Path(__file__).resolve().parent.parent.parent / "common"
 sys.path.append(str(ort_inference_utils_parent))
 
+# pylint: disable=wrong-import-position
 from ort_inference import get_ort_inference_session  # noqa: E402
 
 
@@ -34,7 +35,7 @@ def get_args(raw_args):
     )
     parser.add_argument("--repeat_test_num", type=int, default=20, help="Number of iterations. Only for latency metric")
     parser.add_argument("--sleep_num", type=int, default=0, help="Number of sleep iterations. Only for latency metric")
-    parser.add_argument("--io_bind", type=bool, default=False, help="Use IO binding. Only for latency metric")
+    parser.add_argument("--io_bind", action="store_true", help="Use IO binding. Only for latency metric")
     parser.add_argument("--device", type=str, default="cpu", help="Device to io bind on")
 
     return parser.parse_args(raw_args)
@@ -46,7 +47,7 @@ def main(raw_args=None):
     args.output_dir = Path(args.output_dir)
 
     # load inference setting
-    with open(args.inference_settings_path, "rb") as f:
+    with open(args.inference_settings_path, "rb") as f:  # noqa: PTH123
         inference_settings = pickle.load(f)
 
     # create session

@@ -6,12 +6,17 @@ import argparse
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 
+import config
 import onnxruntime as ort
 from packaging import version
 
+from olive.model import CompositeOnnxModel, ONNXModel
 from olive.workflows import run as olive_run
+
+# pylint: disable=redefined-outer-name
 
 
 def optimize(model_name: str, optimized_model_dir: Path):
@@ -20,29 +25,31 @@ def optimize(model_name: str, optimized_model_dir: Path):
     # protobuf 4.x aborts with OOM when optimizing dolly
     if version.parse(protobuf_version) > version.parse("3.20.3"):
         print("This script requires protobuf 3.20.3. Please ensure your package version matches requirements.txt.")
-        exit(1)
+        sys.exit(1)
 
     ort.set_default_logger_severity(4)
     script_dir = Path(__file__).resolve().parent
 
-    model_info = dict()
+    model_info = {}
 
     # Optimize the model with Olive
     print(f"\nOptimizing {model_name}")
 
     olive_config = None
-    with open(script_dir / "config_dolly_v2.json", "r") as fin:
+    with (script_dir / "config_dolly_v2.json").open() as fin:
         olive_config = json.load(fin)
 
+    olive_config["input_model"]["config"]["model_path"] = model_name
+    olive_config["passes"]["optimize"]["config"]["hidden_size"] = config.hidden_size
     olive_run(olive_config)
 
-    # TODO: rename the 0 prefix in the path when the hardware accelerator feature is implemented.
+    # TODO(PatriceVignola): rename the 0 prefix in the path when the hardware accelerator feature is implemented.
     footprints_file_path = Path(__file__).resolve().parent / "footprints/dolly_v2_gpu-dml_footprints.json"
     with footprints_file_path.open("r") as footprint_file:
         footprints = json.load(footprint_file)
         conversion_footprint = None
         merger_footprint = None
-        for _, footprint in footprints.items():
+        for footprint in footprints.values():
             if footprint["from_pass"] == "OptimumConversion":
                 conversion_footprint = footprint
             elif footprint["from_pass"] == "OptimumMerging":
@@ -50,15 +57,15 @@ def optimize(model_name: str, optimized_model_dir: Path):
 
         assert conversion_footprint and merger_footprint
 
-        unoptimized_config = conversion_footprint["model_config"]["config"]
-        optimized_config = merger_footprint["model_config"]["config"]
+        unopimized_olive_model = CompositeOnnxModel(**conversion_footprint["model_config"]["config"])
+        optimized_olive_model = ONNXModel(**merger_footprint["model_config"]["config"])
 
         model_info = {
             "unoptimized": {
-                "path": os.path.dirname(unoptimized_config["model_components"][0]["config"]["model_path"]),
+                "path": Path(unopimized_olive_model.get_model_component(0).model_path).parent,
             },
             "optimized": {
-                "path": Path(optimized_config["model_path"]),
+                "path": Path(optimized_olive_model.model_path),
             },
         }
 
@@ -93,6 +100,18 @@ if __name__ == "__main__":
         "--max_new_tokens", default=64, type=int, help="Maximum number of tokens that the model will generate"
     )
     args = parser.parse_args()
+
+    model_to_hidden_size = {
+        "databricks/dolly-v2-3b": 2560,
+        "databricks/dolly-v2-7b": 4096,
+    }
+
+    if args.model not in model_to_hidden_size:
+        print(
+            f"WARNING: {args.model} is not an officially supported model for this example and may not work as expected."
+        )
+
+    config.hidden_size = model_to_hidden_size.get(args.model, 2560)
 
     script_dir = Path(__file__).resolve().parent
     optimized_model_dir = script_dir / "models" / "optimized" / args.model

@@ -8,17 +8,27 @@ from torch.utils.data import DataLoader
 from olive.data.registry import Registry
 
 
+@Registry.register_dataloader()
+def skip_dataloader(dataset):
+    return dataset
+
+
 @Registry.register_default_dataloader()
-def default_dataloader(_dataset, batch_size=1, **kwargs):
-    return DataLoader(_dataset, batch_size=batch_size, **kwargs)
+def default_dataloader(dataset, batch_size=1, **kwargs):
+    return DataLoader(dataset, batch_size=batch_size, **kwargs)
 
 
 @Registry.register_dataloader()
-def default_calibration_dataloader(_dataloader, **kwargs):
-    # TODO: consider other quantization calibration interface in SNPE/INC/OpenVINO/Torch and etc.
-    from onnxruntime.quantization import CalibrationDataReader
+def no_auto_batch_dataloader(dataset, **kwargs):
+    # torch dataloader will automatically batch if batch_size is not None
+    # this dataloader will not batch. Assumes that the dataset already returns a batch
+    return DataLoader(dataset, batch_size=None, **kwargs)
 
-    dataloader = _dataloader
+
+@Registry.register_dataloader()
+def default_calibration_dataloader(dataloader, **kwargs):
+    # TODO(trajep): consider other quantization calibration interface in SNPE/INC/OpenVINO/Torch and etc.
+    from onnxruntime.quantization import CalibrationDataReader
 
     class _CalibrationDataReader(CalibrationDataReader):
         def __init__(self, dataloader, **kwargs):

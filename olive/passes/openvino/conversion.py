@@ -7,15 +7,13 @@ from typing import Any, Dict, List, Tuple, Union
 
 from olive.constants import Framework
 from olive.hardware.accelerator import AcceleratorSpec
-from olive.model import ModelStorageKind, ONNXModel, OpenVINOModel, PyTorchModel
+from olive.model import ONNXModel, OpenVINOModel, PyTorchModel
 from olive.passes import Pass
 from olive.passes.pass_config import PassConfigParam
 
 
 class OpenVINOConversion(Pass):
-    """
-    Converts PyTorch, ONNX or TensorFlow Model to OpenVino Model.
-    """
+    """Converts PyTorch, ONNX or TensorFlow Model to OpenVino Model."""
 
     @staticmethod
     def _default_config(accelerator_spec: AcceleratorSpec) -> Dict[str, PassConfigParam]:
@@ -51,7 +49,7 @@ class OpenVINOConversion(Pass):
         }
 
     def _run_for_config(
-        self, model: Union[PyTorchModel, ONNXModel], config: Dict[str, Any], output_model_path: str
+        self, model: Union[PyTorchModel, ONNXModel], data_root: str, config: Dict[str, Any], output_model_path: str
     ) -> OpenVINOModel:
         import torch
 
@@ -59,13 +57,14 @@ class OpenVINOConversion(Pass):
             from openvino.runtime import serialize
             from openvino.tools.mo import convert_model
         except ImportError:
-            raise ImportError("Please install olive-ai[openvino] to use OpenVINO model")
+            raise ImportError("Please install olive-ai[openvino] to use OpenVINO model") from None
 
-        model_name = model.name if model.name else "ov_model"
+        # output model always has ov_model as name stem
+        model_name = "ov_model"
 
         model_input_param = "input_model"
         input_model = model.model_path
-        if model.framework == Framework.TENSORFLOW and model.model_storage_kind == ModelStorageKind.LocalFolder:
+        if model.framework == Framework.TENSORFLOW and Path(model.model_path).is_dir():
             model_input_param = "saved_model_dir"
         if model.framework == Framework.PYTORCH:
             input_model = model.load_model()
@@ -86,6 +85,4 @@ class OpenVINOConversion(Pass):
 
         # Save as ov model
         serialize(ov_model, xml_path=str(output_dir.with_suffix(".xml")), bin_path=str(output_dir.with_suffix(".bin")))
-        openvino_model = OpenVINOModel(model_path=output_model_path, name=model_name)
-
-        return openvino_model
+        return OpenVINOModel(model_path=output_model_path)

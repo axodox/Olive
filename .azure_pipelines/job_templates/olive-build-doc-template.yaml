@@ -18,7 +18,7 @@ jobs:
         versionSpec: 3.8
       displayName: Use Python 3.8
 
-    # checout release branch if doc_version provided
+    # checkout release branch if doc_version provided
     - script: |
         git config --global user.email "olivedevteam@microsoft.com"
         git config --global user.name "olivedevteam"
@@ -27,17 +27,15 @@ jobs:
       displayName: Checkout release branch
       condition: ne('${{parameters.doc_version}}', 'latest')
 
-    - script: make install-olive PIPELINE=True INSTALL_EXTRAS=[cpu]
+    - script: python -m pip install .[cpu]
       displayName: Install Olive
 
-    - template: run-olive-script.yaml
-      parameters:
-        displayName: Make Docs
-        script: |
-          cd docs
-          python -m pip install -r requirements.txt
-          make html
-        windows: False
+    - script: |
+        cd docs
+        python -m pip install -r requirements.txt
+        make html
+        make linkcheck
+      displayName: Make Docs
 
     - task:  PublishPipelineArtifact@1
       inputs:

@@ -9,16 +9,24 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Union
 
 import onnx
+from packaging import version
 
+from olive.cache import get_local_path_from_root
+from olive.common.config_utils import validate_config
 from olive.common.utils import hash_string
+from olive.data.config import DataConfig
+from olive.exception import OlivePassError
 from olive.hardware.accelerator import AcceleratorSpec
-from olive.model import ModelStorageKind, ONNXModel
+from olive.model import ONNXModel
 from olive.passes import Pass
 from olive.passes.onnx.common import get_external_data_config, model_proto_to_file, model_proto_to_olive_model
-from olive.passes.pass_config import PassConfigParam
+from olive.passes.pass_config import ParamCategory, PassConfigParam
+from olive.resource_path import OLIVE_RESOURCE_ANNOTATIONS, LocalFile
 from olive.strategy.search_parameter import Boolean, Categorical, Conditional, ConditionalDefault
 
 logger = logging.getLogger(__name__)
+
+# pylint: disable=consider-using-with
 
 # common config for both static and dynamic quantization
 _onnx_quantization_config = {
@@ -72,15 +80,6 @@ _onnx_quantization_config = {
             some models running on non-VNNI machine, especially for per-channel mode.
             Tips: When to use reduce_range and per-channel quantization:
             https://onnxruntime.ai/docs/performance/quantization.html#when-to-use-reduce-range-and-per-channel-quantization
-        """,
-    ),
-    "optimize_model": PassConfigParam(
-        type_=bool,
-        default_value=False,
-        searchable_values=Boolean(),
-        description="""
-            Deprecating Soon in ONNX! Optimize model before quantization. NOT recommended, optimization will
-            change the computation graph, making debugging of quantization loss difficult.
         """,
     ),
     "quant_preprocess": PassConfigParam(
@@ -140,28 +139,34 @@ _extra_options_config = {
 # static quantization specific config
 _static_dataloader_config = {
     "data_dir": PassConfigParam(
-        type_=Union[Path, str],
-        is_path=True,
+        type_=OLIVE_RESOURCE_ANNOTATIONS,
+        category=ParamCategory.DATA,
         description="""
             Path to the directory containing the dataset.
-            For local data, it is required if quant_mode is 'static'.
+            For local data, it is required if quant_mode is 'static' and dataloader_func is provided.
         """,
     ),
     "batch_size": PassConfigParam(
         type_=int,
         default_value=1,
         description="""
-            Batch size for calibration, required if quant_mode is 'static'.
+            Batch size for calibration, only used if dataloader_func is provided.
         """,
     ),
-    # TODO: remove this option once we have a data config ready
+    # TODO(trajep): remove this option once we have a data config ready
     "dataloader_func": PassConfigParam(
         type_=Union[Callable, str],
-        required=False,
-        is_object=True,
+        category=ParamCategory.OBJECT,
         description="""
             Function/function name to generate dataloader for calibration,
-            required if quant_mode is 'static'
+            required if quant_mode is 'static' and data_config is None.
+        """,
+    ),
+    "data_config": PassConfigParam(
+        type_=Union[DataConfig, Dict],
+        description="""
+            Data config for calibration, required if quant_mode is 'static' and
+            dataloader_func is None.
         """,
     ),
 }
@@ -174,6 +179,7 @@ _static_optional_config = {
         description="""
             Current calibration methods supported are MinMax and Entropy,
             Please use CalibrationMethod.MinMax or CalibrationMethod.Entropy as options.
+            Percentile is not supported for onnxruntime==1.16.0, please avoid to set/search it.
         """,
     ),
     "quant_format": PassConfigParam(
@@ -210,16 +216,13 @@ _static_optional_config = {
 
 
 class OnnxQuantization(Pass):
-    """
-    Quantize ONNX model with onnxruntime where we can search for
-    best parameters for static/dynamic quantization at same time.
-    """
+    """Quantize ONNX model with static/dynamic quantization techniques."""
 
     _requires_user_script = True
-    _requires_data_config = True
 
     def _initialize(self):
         super()._initialize()
+        # pylint: disable=attribute-defined-outside-init
         self.tmp_dir = tempfile.TemporaryDirectory(prefix="olive_tmp")
 
     @staticmethod
@@ -242,7 +245,7 @@ class OnnxQuantization(Pass):
         # static quantization config
         config.update(deepcopy(_static_dataloader_config))
         static_optional_config = deepcopy(_static_optional_config)
-        for _, value in static_optional_config.items():
+        for value in static_optional_config.values():
             # default value is conditional on quant_mode
             # if quant_mode is static, use the default value in static_optional_config
             # if quant_mode is dynamic, set default value as ignored. dynamic quantization doesn't use this parameter
@@ -262,9 +265,9 @@ class OnnxQuantization(Pass):
                 # ignore the parameter if quant_mode is dynamic
                 # if quant_mode is static, use the searchable_values in static_optional_config by expanding the parents
                 value.searchable_values = Conditional(
-                    parents=("quant_mode",) + value.searchable_values.parents,
+                    parents=("quant_mode", *value.searchable_values.parents),
                     support={
-                        ("static",) + key: value.searchable_values.support[key]
+                        ("static", *key): value.searchable_values.support[key]
                         for key in value.searchable_values.support
                     },
                     default=Conditional.get_ignored_choice(),
@@ -279,31 +282,39 @@ class OnnxQuantization(Pass):
         config.update(get_external_data_config())
         return config
 
-    def validate_search_point(self, search_point: Dict[str, Any]) -> bool:
-        config = self.config_at_search_point(search_point)
+    def validate_search_point(
+        self, search_point: Dict[str, Any], accelerator_spec: AcceleratorSpec, with_fixed_value: bool = False
+    ) -> bool:
+        config = search_point or {}
+        if with_fixed_value:
+            config = self.config_at_search_point(search_point)
         if config["quant_mode"] == "static":
             if (
                 config["weight_type"] == "QInt8"
                 and config["activation_type"] == "QInt8"
                 and config["quant_format"] == "QOperator"
             ):
-                logger.info("QOperator is not supported for QInt8 activation and weight.")
-                return False
-            if config["weight_type"] != config["activation_type"]:
-                logger.info("Weight type and activation type must be the same.")
+                logger.info("S8S8 with QOperator will be slow on x86-64 CPUs and should be avoided in general")
                 return False
             if config["EnableSubgraph"] is True:
-                logger.info("EnabaleSubgraph is not supported for static quantization.")
+                logger.info("EnableSubgraph is not supported for static quantization.")
                 return False
         return True
 
-    def _run_for_config(self, model: ONNXModel, config: Dict[str, Any], output_model_path: str) -> ONNXModel:
+    def _run_for_config(
+        self, model: ONNXModel, data_root: str, config: Dict[str, Any], output_model_path: str
+    ) -> ONNXModel:
+        from onnxruntime import __version__ as OrtVersion
         from onnxruntime.quantization import QuantFormat, QuantType, quantize_dynamic, quantize_static
         from onnxruntime.quantization.calibrate import CalibrationMethod
 
         # start with a copy of the config
         run_config = deepcopy(config)
         is_static = run_config["quant_mode"] == "static"
+        if is_static:
+            assert (
+                config["dataloader_func"] or config["data_config"]
+            ), "dataloader_func or data_config is required for static quantization."
 
         output_model_path = ONNXModel.resolve_path(output_model_path)
 
@@ -335,9 +346,7 @@ class OnnxQuantization(Pass):
                 model = self._quant_preprocess(model, preprocessed_temp_model_path)
             else:
                 logger.info("Already processed model for quantization, skipping preprocessing")
-                model = ONNXModel(
-                    preprocessed_temp_model_path, model.name, model_storage_kind=ModelStorageKind.LocalFolder
-                )
+                model = ONNXModel(LocalFile({"path": preprocessed_temp_model_path}))
 
         # keys not needed for quantization
         to_delete = ["quant_mode", "script_dir", "user_script", "quant_preprocess", "data_config"]
@@ -369,59 +378,83 @@ class OnnxQuantization(Pass):
             if key in run_config:
                 del run_config[key]
 
+        # for ORT version < 1.16.0, set optimize_model to False
+        # always set it to False since it is not recommended and is removed in ORT 1.16.0
+        # user needs to call pre-process to optimize the model, we already have pre-process option
+        if version.parse(OrtVersion) < version.parse("1.16.0"):
+            run_config["optimize_model"] = False
+
         # to be safe, run the quantizer with use_external_data_format set to `True` and
         # `model_output` to a temporary directory
         # reload the model and save to output_model_path using the external data config
-        # TODO: don't default to use_external_data_format=True if the loading and saving model makes
+        # TODO(jambayk): don't default to use_external_data_format=True if the loading and saving model makes
         # the pass inefficient
-        tmp_dir = tempfile.TemporaryDirectory(prefix="olive_tmp")
-        tmp_dir_path = Path(tmp_dir.name)
-        tmp_model_path = str(tmp_dir_path / Path(output_model_path).name)
+        new_tmp_dir = tempfile.TemporaryDirectory(prefix="olive_tmp")
+        tmp_model_path = str(Path(new_tmp_dir.name) / Path(output_model_path).name)
 
         if is_static:
             # get the dataloader
-            # TODO: only use data config
-            if self._user_module_loader.user_module:
+            # TODO(trajep): only use data config
+            if config["dataloader_func"]:
+                data_dir = get_local_path_from_root(data_root, config["data_dir"])
                 dataloader = self._user_module_loader.call_object(
-                    self._fixed_params["dataloader_func"],
-                    self._fixed_params["data_dir"],
-                    self._fixed_params["batch_size"],
+                    config["dataloader_func"],
+                    data_dir,
+                    config["batch_size"],
                 )
-            elif self._data_config:
-                dataloader = self._data_config.to_data_container().create_calibration_dataloader()
-            quantize_static(
-                model_input=model.model_path,
-                model_output=tmp_model_path,
-                calibration_data_reader=dataloader,
-                use_external_data_format=True,
-                **run_config,
-            )
+            elif config["data_config"]:
+                data_config = validate_config(config["data_config"], DataConfig)
+                dataloader = data_config.to_data_container().create_calibration_dataloader(data_root)
+            try:
+                quantize_static(
+                    model_input=model.model_path,
+                    model_output=tmp_model_path,
+                    calibration_data_reader=dataloader,
+                    use_external_data_format=True,
+                    **run_config,
+                )
+            except (AttributeError, ValueError) as e:
+                raise OlivePassError("quantize_static failed.") from e
         else:
-            quantize_dynamic(
-                model_input=model.model_path, model_output=tmp_model_path, use_external_data_format=True, **run_config
-            )
+            try:
+                quantize_dynamic(
+                    model_input=model.model_path,
+                    model_output=tmp_model_path,
+                    use_external_data_format=True,
+                    **run_config,
+                )
+            except (AttributeError, ValueError) as e:
+                raise OlivePassError("quantize_dynamic failed.") from e
 
         # load the model
         onnx_model = onnx.load(tmp_model_path)
         # the model is loaded into memory, so it's safe to delete previously exported files
-        tmp_dir.cleanup()
+        # NOTE: Don't cleanup self.tmp_dir to avoid preprocessing the same model again during
+        # recurrent passes of the search.
+        new_tmp_dir.cleanup()
 
         # save the model to the output path and return the model
-        return model_proto_to_olive_model(onnx_model, output_model_path, config, model.name)
+        return model_proto_to_olive_model(onnx_model, output_model_path, config)
 
-    def _quant_preprocess(self, model: ONNXModel, output_model_path: str) -> ONNXModel:
+    def _quant_preprocess(self, model: ONNXModel, output_model_path: Union[str, Path]) -> ONNXModel:
         from onnxruntime.quantization.preprocess import quant_pre_process
 
         try:
-            quant_pre_process(input_model_path=model.model_path, output_model_path=output_model_path, auto_merge=True)
-            has_external_data = False
+            quant_pre_process(
+                input_model_path=model.model_path,
+                output_model_path=str(output_model_path),
+                auto_merge=True,
+                save_as_external_data=True,
+            )
         except Exception as e:
-            # TODO: try with `skip_optimization = True`
+            # TODO(jambayk): try with `skip_optimization = True`
             # quantization preprocessing will fail if the model is too large and `skip_optimization = False`
             # there are some problems with the path to where the external data is saved
             # need to find out why before enabling this
 
-            logger.warning(f"Failed to run quantization preprocessing with error of {e}. Using original model.")
+            logger.warning(
+                f"Failed to run quantization preprocessing with error of {e}. Using original model.", exc_info=True
+            )
             # save original model to output path
             onnx_model = onnx.load(model.model_path)
             model_proto_to_file(
@@ -429,17 +462,13 @@ class OnnxQuantization(Pass):
                 output_model_path,
                 save_as_external_data=True,  # always save as external data to avoid failures due to large models
             )
-            has_external_data = True
 
-        return ONNXModel(
-            output_model_path,
-            model.name,
-            model_storage_kind=ModelStorageKind.LocalFolder if has_external_data else ModelStorageKind.LocalFile,
-        )
+        # since this is only used internally, we will just treat it as a model file
+        return ONNXModel(LocalFile({"path": output_model_path}))
 
 
 class OnnxDynamicQuantization(OnnxQuantization):
-    """ONNX Dynamic Quantization Pass"""
+    """ONNX Dynamic Quantization Pass."""
 
     _requires_user_script = False
 
@@ -459,9 +488,7 @@ class OnnxDynamicQuantization(OnnxQuantization):
 
 
 class OnnxStaticQuantization(OnnxQuantization):
-    """ONNX Static Quantization Pass"""
-
-    _requires_user_script = True
+    """ONNX Static Quantization Pass."""
 
     @staticmethod
     def _default_config(accelerator_spec: AcceleratorSpec) -> Dict[str, PassConfigParam]:

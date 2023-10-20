@@ -7,8 +7,9 @@ import shutil
 from pathlib import Path
 from typing import Dict, List, Union
 
-from pydantic import validator
+from pydantic import root_validator, validator
 
+import olive.systems.system_alias as system_alias
 from olive.azureml.azureml_client import AzureMLClientConfig
 from olive.common.config_utils import ConfigBase, validate_config
 from olive.systems.common import AzureMLDockerConfig, LocalDockerConfig, SystemType
@@ -23,24 +24,31 @@ class LocalTargetUserConfig(TargetUserConfig):
 
 
 class DockerTargetUserConfig(TargetUserConfig):
-    local_docker_config: LocalDockerConfig
+    local_docker_config: LocalDockerConfig = None
     is_dev: bool = False
+    olive_managed_env: bool = False
+    requirements_file: Union[Path, str] = None
 
 
 class AzureMLTargetUserConfig(TargetUserConfig):
     azureml_client_config: AzureMLClientConfig = None
     aml_compute: str
-    aml_docker_config: AzureMLDockerConfig
+    aml_docker_config: AzureMLDockerConfig = None
+    resources: Dict = None
     instance_count: int = 1
     is_dev: bool = False
+    olive_managed_env: bool = False
+    requirements_file: Union[Path, str] = None
 
 
 class PythonEnvironmentTargetUserConfig(TargetUserConfig):
     python_environment_path: Union[
         Path, str
-    ]  # path to the python environment, e.g. /home/user/anaconda3/envs/myenv, /home/user/.virtualenvs/myenv
+    ] = None  # path to the python environment, e.g. /home/user/anaconda3/envs/myenv, /home/user/.virtualenvs/myenv
     environment_variables: Dict[str, str] = None  # os.environ will be updated with these variables
     prepend_to_path: List[str] = None  # paths to prepend to os.environ["PATH"]
+    olive_managed_env: bool = False  # if True, the environment will be created and managed by Olive
+    requirements_file: Union[Path, str] = None  # path to the requirements.txt file
 
     @validator("python_environment_path", "prepend_to_path", pre=True, each_item=True)
     def _get_abspath(cls, v):
@@ -48,14 +56,15 @@ class PythonEnvironmentTargetUserConfig(TargetUserConfig):
 
     @validator("python_environment_path")
     def _validate_python_environment_path(cls, v):
-        # check if the path exists
-        if not Path(v).exists():
-            raise ValueError(f"Python path {v} does not exist")
+        if v:
+            # check if the path exists
+            if not Path(v).exists():
+                raise ValueError(f"Python path {v} does not exist")
 
-        # check if python exists in the path
-        python_path = shutil.which("python", path=v)
-        if not python_path:
-            raise ValueError(f"Python executable not found in the path {v}")
+            # check if python exists in the path
+            python_path = shutil.which("python", path=v)
+            if not python_path:
+                raise ValueError(f"Python executable not found in the path {v}")
         return v
 
 
@@ -82,8 +91,18 @@ def import_system_from_type(system_type: SystemType):
 
 
 class SystemConfig(ConfigBase):
-    type: SystemType
+    type: SystemType  # noqa: A003
     config: TargetUserConfig = None
+
+    @root_validator(pre=True)
+    def validate_config_type(cls, values):
+        type_name = values.get("type")
+        system_alias_class = getattr(system_alias, type_name, None)
+        if system_alias_class:
+            values["type"] = system_alias_class.system_type
+            values["config"]["accelerators"] = system_alias_class.accelerators
+            # TODO(myguo): consider how to use num_cpus and num_gpus in distributed inference.
+        return values
 
     @validator("config", pre=True, always=True)
     def validate_config(cls, v, values):

@@ -19,7 +19,7 @@ def post_process(result):
     return [np.argmax(result)]
 
 
-def create_dataloader(data_dir, batchsize):
+def create_dataloader(data_dir, batchsize, *args, **kwargs):
     dataset_config = {"data_source": data_dir}
     transform = transforms.Compose(
         [transforms.ToTensor(), transforms.Normalize((0.4914, 0.4822, 0.4465), (0.247, 0.243, 0.261))]
@@ -30,8 +30,8 @@ def create_dataloader(data_dir, batchsize):
 
 class CifarDataLoader(DataLoader):
     def __init__(self, config, dataset):
-        """
-        Initialize config and dataset.
+        """Initialize config and dataset.
+
         :param config: created config with DATA_DIR path.
         """
         if not isinstance(config, dict):
@@ -43,23 +43,21 @@ class CifarDataLoader(DataLoader):
         return len(self.labels)
 
     def __getitem__(self, index):
-        """
-        Return one sample of index, label and picture.
+        """Return one sample of index, label and picture.
+
         :param index: index of the taken sample.
         """
         if index >= len(self):
             raise IndexError
 
         return (
-            self.pictures[index].numpy()[
-                None,
-            ],
+            self.pictures[index].numpy()[None,],
             self.labels[index],
         )
 
     def load_data(self, dataset):
-        """
-        Load dataset in needed format.
+        """Load dataset in needed format.
+
         :param dataset:  downloaded dataset.
         """
         pictures, labels, indexes = [], [], []

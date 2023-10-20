@@ -30,23 +30,40 @@ This document introduces Olive and provides some examples to get you started.
 
 .. toctree::
    :maxdepth: 1
+   :caption: FEATURES
+
+   features/model_transformations_and_optimizations
+   features/huggingface_model_optimization
+   features/packaging_output_models
+   features/custom_scripts
+   features/azureml_integration
+
+.. toctree::
+   :maxdepth: 1
+   :caption: EXTENDING OLIVE
+
+   extending_olive/design
+   extending_olive/how_to_add_optimization_pass
+
+.. toctree::
+   :maxdepth: 1
    :caption: TUTORIALS
 
-   tutorials/design
    tutorials/configure_systems
    tutorials/configure_metrics
    tutorials/configure_pass
-   tutorials/configure_hardware_optimizations
+   tutorials/configure_data
+   tutorials/configure_model_path
    tutorials/advanced_users
-   tutorials/how_to_write_userscript
-   tutorials/packaging_output_models
-   tutorials/how_to_add_optimization_pass
+   tutorials/azure_arc
+   tutorials/azureml_scripts
 
 .. toctree::
    :maxdepth: 1
    :caption: API REFERENCE
 
    api/models.rst
+   api/resource_path.rst
    api/systems.rst
    api/evaluator.rst
    api/metric.rst

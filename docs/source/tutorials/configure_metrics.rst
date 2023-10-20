@@ -1,10 +1,10 @@
-Configuring Metric
-===================
+How To Configure Metric
+=======================
 
 This document describes how to configure the different types of Metrics.
 
 Metric Types
----------
+-------------
 
 Accuracy Metric
 ~~~~~~~~~~~~~~~
@@ -19,8 +19,8 @@ Accuracy Metric
                 "type": "accuracy",
                 "sub_types": [
                     {"name": "accuracy_score", "priority": 1, "goal": {"type": "max-degradation", "value": 0.01}},
-                    {"name": "f1_score"},
-                    {"name": "auc", "metric_config": {"reorder": true}}
+                    {"name": "f1_score", "metric_config": {"multiclass": false}},
+                    {"name": "auroc", "metric_config": {"num_classes": 2}}
                 ],
                 "user_config": {
                     "post_processing_func": "post_process",
@@ -55,7 +55,7 @@ Accuracy Metric
                 goal={"type": "max-degradation", "value": 0.01}
             )
 
-Please refer to this `example <https://github.com/microsoft/Olive/blob/main/examples/bert_ptq_cpu/user_script.py>`_
+Please refer to this `example <https://github.com/microsoft/Olive/blob/main/examples/bert/user_script.py>`__
 for :code:`"user_script.py"`.
 
 Latency Metric
@@ -101,7 +101,7 @@ Latency Metric
                 }
             )
 
-Please refer to this `example <https://github.com/microsoft/Olive/blob/main/examples/bert_ptq_cpu/user_script.py>`_
+Please refer to this `example <https://github.com/microsoft/Olive/blob/main/examples/bert/user_script.py>`_
 for :code:`"user_script.py"`.
 
 Custom Metric
@@ -119,7 +119,7 @@ specify its name in :code:`"evaluate_func"` field, and Olive will call your func
                 "name": "accuracy",
                 "type": "custom",
                 "sub_types": [
-                    {"name": "accuracy_custom", "priority": 1, "higher_is_better": True, "goal": {"type": "max-degradation", "value": 0.01}}
+                    {"name": "accuracy_custom", "priority": 1, "higher_is_better": true, "goal": {"type": "max-degradation", "value": 0.01}}
                 ],
                 "user_config": {
                     "user_script": "user_script.py",
@@ -154,7 +154,7 @@ specify its name in :code:`"evaluate_func"` field, and Olive will call your func
                 }
             )
 
-Please refer to this `example <https://github.com/microsoft/Olive/blob/main/examples/resnet_ptq_cpu/user_script.py>`_
+Please refer to this `example <https://github.com/microsoft/Olive/blob/main/examples/resnet/user_script.py>`__
 for :code:`"user_script.py"`.
 
 Here is an example of the :code:`"eval_accuracy"` function in :code:`"user_script.py"`:
@@ -165,9 +165,18 @@ In your :code:`"user_script.py"`, you need to define a function that takes in an
             # evaluate model
             # return metric value
 
+Alternatively, if you only need Olive run the inference and you will calculate the metric by yourself, you can specify :code:`"metric_func": "None"` in the metric configuration.
+Olive will run the inference with you model with the data you provided, and return the inference results to you. You can then calculate the metric by yourself::
+
+        def metric_func(model_output, targets):
+            # model_output[0]: preds, model_output[1]: logits
+            # calculate metric
+            # return metric value
+
+If you provide both :code:`"evaluate_func"` and :code:`"metric_func"`, Olive will call :code:`"evaluate_func"` only.
 
 Multi Metrics configuration
----------
+----------------------------
 If you have multiple metrics to evaluate, you can configure them in the following way::
 
         {
@@ -177,8 +186,8 @@ If you have multiple metrics to evaluate, you can configure them in the followin
                     "type": "accuracy",
                     "sub_types": [
                         {"name": "accuracy_score", "priority": 1, "goal": {"type": "max-degradation", "value": 0.01}},
-                        {"name": "f1_score"},
-                        {"name": "auc", "metric_config": {"reorder": true}}
+                        {"name": "f1_score", "metric_config": {"multiclass": false}},
+                        {"name": "auroc", "metric_config": {"num_classes": 2}}
                     ]
                 },
                 {

@@ -8,31 +8,29 @@ from typing import Callable, Dict, Optional, Type, Union
 
 from pydantic import create_model, validator
 
-from olive.common.config_utils import ConfigBase, ConfigParam, validate_object
-from olive.data.config import DataConfig
+from olive.common.config_utils import ConfigBase, ConfigParam, ParamCategory, validate_object, validate_resource_path
 from olive.strategy.search_parameter import SearchParameter, json_to_search_parameter
 
 
 class PassParamDefault(str, Enum):
-    """
-    Default values for passes.
-    """
+    """Default values for passes."""
 
     DEFAULT_VALUE = "DEFAULT_VALUE"
     SEARCHABLE_VALUES = "SEARCHABLE_VALUES"
 
 
 class PassConfigParam(ConfigParam):
-    """
-    Dataclass for pass configuration parameters.
+    """Dataclass for pass configuration parameters.
 
     Parameters
     ----------
     type_ : type of the parameter
     required : whether the parameter is required
-    is_object : whether the parameter is an object/function. If so, this parameter accepts the object or a string with
-        the name of the object/function in the user script. The type must include str.
-    is_path : whether the parameter is a path. If so, this file/folder will be uploaded to the host system.
+    category : category of the parameter. it could be
+        * object: whether the parameter is an object/function. If so, this parameter accepts the object or a string with
+          the name of the object/function in the user script. The type must include str.
+        * path : whether the parameter is a path. If so, this file/folder will be uploaded to the host system.
+        * data: whether the parameter is a data path, which will be used to do path normalization based on the data root
     description : description of the parameter
     default_value: default value for the parameter. This value is used if search is disabled or there are no searchable
         values. Must be the same type as the parameter or a ConditionalDefault SearchParameter.
@@ -41,11 +39,10 @@ class PassConfigParam(ConfigParam):
     """
 
     searchable_values: SearchParameter = None
-    is_path: bool = False
 
     def __repr__(self):
         repr_list = []
-        booleans = ["required", "is_path", "is_object"]
+        booleans = ["required"]
         for k, v in self.__dict__.items():
             if k in booleans:
                 if v:
@@ -55,7 +52,7 @@ class PassConfigParam(ConfigParam):
         return f"({', '.join(repr_list)})"
 
 
-# TODO: set types for user_script and script_dir once we decide on a convention
+# TODO(jambayk): set types for user_script and script_dir once we decide on a convention
 def get_user_script_config(
     required: Optional[bool] = False, allow_path: Optional[bool] = False
 ) -> Dict[str, PassConfigParam]:
@@ -65,33 +62,22 @@ def get_user_script_config(
 
     user_script_config = {
         "script_dir": PassConfigParam(
-            type_=type_, required=required, is_path=True, description="Directory containing user script dependencies."
+            type_=type_,
+            required=required,
+            category=ParamCategory.PATH,
+            description="Directory containing user script dependencies.",
         ),
         "user_script": PassConfigParam(
             type_=type_,
             required=required,
-            is_path=True,
+            category=ParamCategory.PATH,
             description=(
                 "Path to user script. The values for other parameters which were assigned function or object names will"
                 " be imported from this script."
             ),
         ),
     }
-    return user_script_config
-
-
-def get_data_config(required: Optional[bool] = False):
-    data_config = {
-        "data_config": PassConfigParam(
-            type_=Union[DataConfig, str],
-            required=required,
-            description="""
-                Data config for calibration, required if quant_mode is 'static'.
-                If not provided, a default DataConfig will be used.
-            """,
-        )
-    }
-    return data_config
+    return user_script_config  # noqa: RET504
 
 
 class PassConfigBase(ConfigBase):
@@ -102,7 +88,7 @@ class PassConfigBase(ConfigBase):
         finally:
             if field.required and isinstance(v, PassParamDefault):
                 raise ValueError(f"{field.name} is required and cannot be set to {v.value}")
-            return v
+            return v  # noqa: B012 # pylint: disable=lost-exception, return-in-finally
 
     @validator("*", pre=True)
     def _validate_search_parameter(cls, v):
@@ -117,14 +103,14 @@ def create_config_class(
     disable_search: Optional[bool] = False,
     validators: Dict[str, Callable] = None,
 ) -> Type[PassConfigBase]:
-    """
-    Create a Pydantic model class from a configuration dictionary.
-    """
+    """Create a Pydantic model class from a configuration dictionary."""
     config = {}
     validators = validators.copy() if validators else {}
     for param, param_config in default_config.items():
-        if param_config.is_object:
+        if param_config.category == ParamCategory.OBJECT:
             validators[f"validate_{param}"] = validator(param, allow_reuse=True)(validate_object)
+        if param == "data_dir":
+            validators[f"validate_{param}"] = validator(param, allow_reuse=True)(validate_resource_path)
 
         type_ = param_config.type_
         if param_config.required:

@@ -1,4 +1,5 @@
 .. _systems:
+
 OliveSystems
 =================================
 The following systems are available in Olive.
@@ -16,18 +17,15 @@ SystemType
     :undoc-members:
 
 .. _local_system_config:
+
 LocalTargetUserConfig
 ^^^^^^^^^^^^^^^^^^^^^
 
 .. autopydantic_settings:: olive.systems.system_config.LocalTargetUserConfig
 
-**Device**
-
-.. autoclass:: olive.systems.common.Device
-    :members:
-    :undoc-members:
 
 .. _docker_system_config:
+
 DockerTargetUserConfig
 ^^^^^^^^^^^^^^^^^^^^^^
 
@@ -38,6 +36,7 @@ DockerTargetUserConfig
 .. autopydantic_settings:: olive.systems.docker.LocalDockerConfig
 
 .. _azureml_system_config:
+
 AzureMLTargetUserConfig
 ^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -48,8 +47,9 @@ AzureMLTargetUserConfig
 .. autopydantic_settings:: olive.systems.azureml.AzureMLDockerConfig
 
 .. _python_environment_system_config:
+
 PythonEnvironmentTargetUserConfig
-^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. autopydantic_settings:: olive.systems.system_config.PythonEnvironmentTargetUserConfig
 
@@ -71,5 +71,16 @@ DockerSystem
 .. autoclass:: olive.systems.docker.DockerSystem
 
 PythonEnvironmentSystem
-^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^
 .. autoclass:: olive.systems.python_environment.PythonEnvironmentSystem
+
+.. _olive_system_alias:
+
+System Alias
+------------------------
+
+.. automodule:: olive.systems.system_alias
+    :members:
+    :undoc-members:
+    :inherited-members:
+    :exclude-members: AzureMLSystemAlias, SurfaceSystemAlias

@@ -7,9 +7,8 @@ dependencies:
   - pip:
       - azure-ai-ml
       - azure-identity
-      - azureml-defaults
-      - azureml-dataprep==4.8.4
-      - onnxruntime==1.13.1
+      - azureml-dataprep!=4.12.0
+      - onnxruntime
       - datasets
       - scipy
       - transformers

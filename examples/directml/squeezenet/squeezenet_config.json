@@ -2,8 +2,6 @@
     "input_model": {
         "type": "PyTorchModel",
         "config": {
-            "model_path": null,
-            "model_storage_kind": "folder",
             "model_loader": "load_pytorch_origin_model",
             "model_script": "user_script.py",
             "io_config": {
@@ -17,7 +15,7 @@
         "local_system": {
             "type": "LocalSystem",
             "config": {
-                "device": "gpu"
+                "accelerators": ["gpu"]
             }
         }
     },
@@ -70,6 +68,7 @@
             "search_algorithm": "exhaustive"
         },
         "evaluator": "common_evaluator",
+        "evaluate_input_model": false,
         "host": "local_system",
         "target": "local_system",
         "clean_cache": true,

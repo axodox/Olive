@@ -19,8 +19,16 @@ class HuggingfaceContainer(DataContainer):
     # Extra arguments auto generation for data components
 
     task_type_components_map: ClassVar[dict] = {
-        # TODO user enumerate update task type
+        # TODO(trajep): user enumerate update task type
         "text-classification": {
             DataComponentType.POST_PROCESS_DATA.value: "text_classification_post_process",
+        },
+        "ner": {
+            DataComponentType.PRE_PROCESS_DATA.value: "ner_huggingface_preprocess",
+            DataComponentType.POST_PROCESS_DATA.value: "ner_post_process",
+        },
+        "text-generation": {
+            DataComponentType.PRE_PROCESS_DATA.value: "text_generation_huggingface_pre_process",
+            DataComponentType.POST_PROCESS_DATA.value: "text_generation_post_process",
         },
     }

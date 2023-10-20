@@ -5,18 +5,22 @@
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Union
 
+from olive.cache import get_local_path_from_root
+from olive.common.config_utils import validate_config
+from olive.data.config import DataConfig
 from olive.hardware.accelerator import AcceleratorSpec
 from olive.model import SNPEModel
 from olive.passes.olive_pass import Pass
-from olive.passes.pass_config import PassConfigParam
-from olive.snpe import SNPEDataLoader
+from olive.passes.pass_config import ParamCategory, PassConfigParam
+from olive.resource_path import OLIVE_RESOURCE_ANNOTATIONS, LocalFile
+from olive.snpe import SNPECommonDataLoader, SNPEDataLoader
 from olive.snpe.tools.dev import quantize_dlc
 from olive.strategy.search_parameter import Boolean
 
 
 class SNPEQuantization(Pass):
-    """
-    Quantize SNPE model.
+    """Quantize SNPE model.
+
     Uses snpe-dlc-quantize tool from the SNPE SDK.
     """
 
@@ -26,16 +30,25 @@ class SNPEQuantization(Pass):
     def _default_config(accelerator_spec: AcceleratorSpec) -> Dict[str, PassConfigParam]:
         return {
             "data_dir": PassConfigParam(
-                type_=str, required=True, is_path=True, description="Path to the data directory."
+                type_=OLIVE_RESOURCE_ANNOTATIONS,
+                required=False,
+                category=ParamCategory.DATA,
+                description="Path to the data directory. Required is data_config is None.",
             ),
             "dataloader_func": PassConfigParam(
-                type_=Union[Callable[[str], SNPEDataLoader], str],
-                required=True,
-                is_object=True,
+                type_=Union[Callable, str],
+                required=False,
+                category=ParamCategory.OBJECT,
                 description=(
                     "Function or function name to create dataloader for quantization. Function should take data"
-                    " directory as an argument and return a olive.snpe.SNPEDataLoader object."
+                    " directory as an argument and return a olive.snpe.SNPEDataLoader or torch.data.DataLoader-like"
+                    " object. Required if data_config is None."
                 ),
+            ),
+            "data_config": PassConfigParam(
+                type_=Union[DataConfig, Dict],
+                required=True,
+                description="Data config for quantization, required if dataloader_func is None",
             ),
             "use_enhanced_quantizer": PassConfigParam(
                 type_=bool,
@@ -67,16 +80,24 @@ class SNPEQuantization(Pass):
             ),
         }
 
-    def _initialize(self):
-        self.dataloader = self._user_module_loader.call_object(
-            self._config["dataloader_func"], self._config["data_dir"]
-        )
-
-    def _run_for_config(self, model: SNPEModel, config: Dict[str, Any], output_model_path: str) -> SNPEModel:
-        config = self._config_class(**config)
-
+    def _run_for_config(
+        self, model: SNPEModel, data_root: str, config: Dict[str, Any], output_model_path: str
+    ) -> SNPEModel:
         if Path(output_model_path).suffix != ".dlc":
             output_model_path += ".dlc"
 
-        quantize_dlc(model.model_path, self.dataloader.get_input_list(), config.dict(), output_model_path)
-        return SNPEModel(model_path=output_model_path, name=model.name, **model.io_config)
+        assert config["dataloader_func"] or config["data_config"], "dataloader_func or data_config is required."
+
+        if config["dataloader_func"]:
+            data_dir = get_local_path_from_root(data_root, config["data_dir"])
+            dataloader = self._user_module_loader.call_object(config["dataloader_func"], data_dir)
+        elif config["data_config"]:
+            data_config = validate_config(config["data_config"], DataConfig)
+            dataloader = data_config.to_data_container().create_dataloader(data_root)
+
+        # convert dataloader to SNPEDataLoader if it is not already
+        if not isinstance(dataloader, SNPEDataLoader):
+            dataloader = SNPECommonDataLoader(dataloader, model.io_config)
+
+        quantize_dlc(model.model_path, dataloader.get_input_list(), config, output_model_path)
+        return SNPEModel(model_path=LocalFile({"path": output_model_path}), **model.io_config)

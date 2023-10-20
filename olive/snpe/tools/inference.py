@@ -21,8 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 def init_snpe_net_adb(dlc_path: str, android_target: str, snpe_adb_prepared: bool = False):
-    """
-    Initialize a snpe inference session by pushing the DLC to the target Android device.
+    """Initialize a snpe inference session by pushing the DLC to the target Android device.
 
     dlc_path: The path to the DLC
     android_target: The target Android device
@@ -47,8 +46,7 @@ def _snpe_net_run_adb(
     persist_ws: bool = False,
     initialized: bool = False,
 ):
-    """
-    Run snpe-net-run on the target Android device.
+    """Run snpe-net-run on the target Android device.
 
     cmd: snpe-net-run command with local paths to DLC, input list and output directory
     android_target: The target Android device.
@@ -136,8 +134,7 @@ def snpe_net_run(
     android_persist_ws: bool = False,
     android_initialized: bool = False,
 ) -> dict:
-    """
-    Run snpe-net-run on the given DLC and input list.
+    """Run snpe-net-run on the given DLC and input list.
 
     dlc_path: The path to the DLC.
     input_list: The path to the input list.
@@ -161,7 +158,7 @@ def snpe_net_run(
     android_persist_ws: Whether to persist the workspace on android.
     android_initialized: Whether the inference session has already been initialized on android using init_snpe_net_adb.
     """
-    tmp_dir = tempfile.TemporaryDirectory(dir=str(Path.cwd()), prefix="olive_tmp_")
+    tmp_dir = tempfile.TemporaryDirectory(prefix="olive_tmp_")  # pylint: disable=consider-using-with
     tmp_dir_path = Path(tmp_dir.name)
 
     # Create the snpe-net-run command
@@ -236,17 +233,24 @@ def snpe_net_run(
         inferences_per_duration = 0 if inferences_per_duration is None else inferences_per_duration
         input_id = f"result_{result_idx}" if inferences_per_duration > 0 else input_ids[result_idx]
         for output_name, output_shape in zip(output_names, output_shapes):
-            raw_file = member / f"{output_name}{delimiter}0.raw"
-            if not raw_file.exists():
-                raw_file = member / f"{output_name}.raw"
+            # output names for dlcs converted from tensorflow models contain ":"
+            # try adding `:0` or `_0` to output file name in case original model was tensorflow and
+            # user provided original output names
+            output_file_name = f"{output_name}{delimiter}0.raw"
+            if not (member / output_file_name).exists():
+                # `:0` is already in the output name or source model was not tensorflow
+                output_file_name = f"{output_name}.raw"
+            if platform.system() == "Windows":
+                # replace ":" with "_" in the file name.
+                output_file_name = output_file_name.replace(":", "_")
+            raw_file = member / output_file_name
 
             # copy the raw file to the workspace and rename it
             if output_dir is not None:
                 output_file = output_dir / f"{input_id}.{output_name}.raw"
                 if platform.system() == "Windows":
                     # replace ":" with "_" in the file name.
-                    # output names for dlcs converted from tensorflow models contain ":"
-                    output_file = output_file.replace(":", "_")
+                    output_file = output_dir / f"{input_id}.{output_name}.raw".replace(":", "_")
                 if len(output_names) == 1:
                     # no need to encode the output name in the file name
                     output_file = output_dir / f"{input_id}.raw"
@@ -275,14 +279,14 @@ def snpe_net_run(
     latencies = {"init": [], "total_inference_time": []}
     for run in range(runs):
         # SNPE DiagLog
-        SNPE_diag_log = tmp_dir_path / f"SNPEDiag_{run}.log"
-        SNPE_diag_csv = tmp_dir_path / f"SNPEDiag_{run}.csv"
+        snpe_diag_log = tmp_dir_path / f"SNPEDiag_{run}.log"
+        snpe_diag_csv = tmp_dir_path / f"SNPEDiag_{run}.csv"
 
-        cmd = f"snpe-diagview --input_log {SNPE_diag_log} --output {SNPE_diag_csv}"
+        cmd = f"snpe-diagview --input_log {snpe_diag_log} --output {snpe_diag_csv}"
         run_snpe_command(cmd)
 
         diag_log = {"init": None, "avg_total_inference_time": None}
-        with open(SNPE_diag_csv, "r") as f:
+        with snpe_diag_csv.open() as f:
             for line in f:
                 message_name = line.split(",")[1].lower()
                 message_value = line.split(",")[3]
@@ -292,7 +296,7 @@ def snpe_net_run(
         latencies["total_inference_time"].append(diag_log["avg_total_inference_time"])
 
         if output_dir is not None:
-            SNPE_diag_csv.rename(output_dir / f"perf_results_{run}.csv")
+            snpe_diag_csv.rename(output_dir / f"perf_results_{run}.csv")
 
     # explicitly delete the tmp directory just to be safe
     tmp_dir.cleanup()
@@ -310,8 +314,7 @@ def snpe_net_run(
 def _snpe_throughput_net_run_adb(
     cmd: str, android_target: str, data_dir: str, persist_ws: bool = False, initialized: bool = False
 ) -> Tuple[str, str]:
-    """
-    Run snpe-throughput-net-run on the target Android device.
+    """Run snpe-throughput-net-run on the target Android device.
 
     cmd: snpe-throughput-net-run command with local paths to the dlc and input raw files.
     android_target: target Android device.
@@ -338,8 +341,8 @@ def _snpe_throughput_net_run_adb(
         # create input_raw with target paths
         inputs = input_raw.split(",")
         target_inputs = []
-        for input in inputs:
-            target_input = Path(input).resolve().relative_to(Path(data_dir).resolve())
+        for input_item in inputs:
+            target_input = Path(input_item).resolve().relative_to(Path(data_dir).resolve())
             target_input = (Path(target_data_dir) / target_input).as_posix()
             target_inputs.append(target_input)
         target_input_raw = ",".join(target_inputs)
@@ -348,8 +351,8 @@ def _snpe_throughput_net_run_adb(
         push_pairs = []
         if not initialized:
             push_pairs = [(dlc_path, target_ws)]
-        for input, target_input in zip(inputs, target_inputs):
-            push_pairs.append((input, Path(target_input).parent.as_posix()))
+        for input_item, target_input in zip(inputs, target_inputs):
+            push_pairs.append((input_item, Path(target_input).parent.as_posix()))
         for src, dst in push_pairs:
             adb_utils.adb_push(src, dst, android_target)
 
@@ -378,8 +381,8 @@ def snpe_throughput_net_run(
     android_persist_ws: bool = False,
     android_initialized: bool = False,
 ) -> float:
-    """
-    Run snpe-throughput-net-run on the given DLC and input list for the given duration.
+    """Run snpe-throughput-net-run on the given DLC and input list for the given duration.
+
     Returns the throughput value.
 
     dlc_path: The path to the DLC.
@@ -397,16 +400,16 @@ def snpe_throughput_net_run(
     cmd = f"snpe-throughput-net-run --container {dlc_path} --duration {duration} --use_{device}"
 
     input_raw = ""
-    with open(input_list, "r") as f:
+    with Path(input_list).open() as f:
         for line in f:
-            if line.startswith("#") or line.startswith("%"):
+            if line.startswith(("#", "%")):
                 continue
             else:
                 first = line.strip()
                 break
 
         if ":=" in first:
-            inputs = list(map(lambda x: (x.split(":=")[0], x.split(":=")[1]), first.split()))
+            inputs = [(x.split(":=")[0], x.split(":=")[1]) for x in first.split()]
             inputs = sorted(inputs, key=lambda x: x[0])
             input_raw = ",".join([x[1] for x in inputs])
         else:
@@ -419,7 +422,7 @@ def snpe_throughput_net_run(
         except ValueError:
             raise ValueError(
                 f"Invalid perf profile '{perf_profile}'. Valid perf profiles are {[p.value for p in PerfProfile]}"
-            )
+            ) from None
         cmd += f" --perf_profile {perf_profile}"
     if enable_cpu_fallback:
         cmd += " --enable_cpu_fallback"
@@ -430,5 +433,4 @@ def snpe_throughput_net_run(
         )
     else:
         stdout, _ = run_snpe_command(cmd)
-    total_throughput = float(stdout.split("Total throughput: ")[1].split(" ")[0])
-    return total_throughput
+    return float(stdout.split("Total throughput: ")[1].split(" ")[0])

@@ -23,8 +23,8 @@ def _validate_target_device(v):
 
 
 class SNPEtoONNXConversion(Pass):
-    """
-    Convert a SNPE DLC to ONNX to use with SNPE Execution Provider.
+    """Convert a SNPE DLC to ONNX to use with SNPE Execution Provider.
+
     Creates a ONNX graph with the SNPE DLC as a node.
     """
 
@@ -47,7 +47,9 @@ class SNPEtoONNXConversion(Pass):
             "validate_target_device": validator("target_device", allow_reuse=True)(_validate_target_device),
         }
 
-    def _run_for_config(self, model: SNPEModel, config: Dict[str, Any], output_model_path: str) -> ONNXModel:
+    def _run_for_config(
+        self, model: SNPEModel, data_root: str, config: Dict[str, Any], output_model_path: str
+    ) -> ONNXModel:
         config = self._config_class(**config)
 
         output_model_path = ONNXModel.resolve_path(output_model_path)
@@ -56,4 +58,4 @@ class SNPEtoONNXConversion(Pass):
         onnx_model = dlc_to_onnx(model.model_path, config.dict(), **model.io_config)
 
         # save the model to the output path and return the model
-        return model_proto_to_olive_model(onnx_model, output_model_path, config.dict(), model.name)
+        return model_proto_to_olive_model(onnx_model, output_model_path, config.dict())

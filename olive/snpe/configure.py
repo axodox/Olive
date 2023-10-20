@@ -8,7 +8,7 @@ from importlib import resources
 from pathlib import Path
 
 from olive.common.utils import run_subprocess
-from olive.snpe.utils.local import get_snpe_root, get_snpe_target_arch
+from olive.snpe.utils.local import get_snpe_root, get_snpe_target_arch, get_snpe_win_arch_name
 
 logger = logging.getLogger("olive.snpe.configure")
 
@@ -29,13 +29,13 @@ def dev():
     logger.info("Done")
 
 
-def eval():
+def eval():  # noqa: A001  #pylint: disable=redefined-builtin
     snpe_arch = get_snpe_target_arch(False)
     if snpe_arch != "ARM64-Windows":
         return
 
     snpe_root = get_snpe_root()
-    target_arch_name = "aarch64-windows-vc19"
+    target_arch_name = get_snpe_win_arch_name(snpe_root, snpe_arch)
 
     logger.info(f"Configuring SNPE for {snpe_arch}...")
 

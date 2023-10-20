@@ -2,17 +2,18 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 # --------------------------------------------------------------------------
-import os
 import shutil
 from pathlib import Path
+from test.integ_test.utils import download_azure_blob
 from zipfile import ZipFile
 
 import torch
-from azure.storage.blob import BlobClient
 from torchvision import datasets
 from torchvision.transforms import ToTensor
 
 from olive.evaluator.metric import AccuracySubType, LatencySubType, Metric, MetricType
+
+# pylint: disable=redefined-outer-name
 
 
 def get_directories():
@@ -35,21 +36,26 @@ def post_process(res):
 
 
 def openvino_post_process(res):
-    res = list(res.values())[0]
+    res = next(iter(res.values()))
     return res.argmax(1)
 
 
-def create_dataloader(data_dir, batch_size):
+def create_dataloader(data_dir, batch_size, *args, **kwargs):
     dataset = datasets.MNIST(data_dir, train=True, download=True, transform=ToTensor())
     return torch.utils.data.DataLoader(dataset, batch_size)
 
 
 def hf_post_process(res):
-    _, preds = torch.max(res[0], dim=1)
+    import transformers
+
+    if isinstance(res, transformers.modeling_outputs.SequenceClassifierOutput):
+        _, preds = torch.max(res.logits, dim=1)
+    else:
+        _, preds = torch.max(res, dim=1)
     return preds
 
 
-def create_hf_dataloader(data_dir, batch_size):
+def create_hf_dataloader(data_dir, batch_size, *args, **kwargs):
     from datasets import load_dataset
     from torch.utils.data import Dataset
     from transformers import AutoTokenizer
@@ -89,13 +95,12 @@ def get_accuracy_metric(post_process, dataloader=create_dataloader):
         "dataloader_func": dataloader,
     }
     sub_types = [{"name": AccuracySubType.ACCURACY_SCORE}]
-    accuracy_metric = Metric(
+    return Metric(
         name="accuracy",
         type=MetricType.ACCURACY,
         sub_types=sub_types,
         user_config=accuracy_metric_config,
     )
-    return accuracy_metric
 
 
 def get_latency_metric(dataloader=create_dataloader):
@@ -104,13 +109,12 @@ def get_latency_metric(dataloader=create_dataloader):
         "dataloader_func": dataloader,
     }
     sub_types = [{"name": LatencySubType.AVG}]
-    latency_metric = Metric(
+    return Metric(
         name="latency",
         type=MetricType.LATENCY,
         sub_types=sub_types,
         user_config=latency_metric_config,
     )
-    return latency_metric
 
 
 def get_hf_accuracy_metric(post_process=hf_post_process, dataloader=create_hf_dataloader):
@@ -158,19 +162,6 @@ def get_openvino_model():
     with ZipFile(download_path) as zip_ref:
         zip_ref.extractall(models_dir)
     return {"model_path": str(models_dir / "openvino")}
-
-
-def download_azure_blob(container, blob, download_path):
-    try:
-        conn_str = os.environ["OLIVEWHEELS_STORAGE_CONNECTION_STRING"]
-    except KeyError:
-        raise Exception("Please set the environment variable OLIVEWHEELS_STORAGE_CONNECTION_STRING")
-
-    blob = BlobClient.from_connection_string(conn_str=conn_str, container_name=container, blob_name=blob)
-
-    with open(download_path, "wb") as my_blob:
-        blob_data = blob.download_blob()
-        blob_data.readinto(my_blob)
 
 
 def delete_directories():

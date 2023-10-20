@@ -2,17 +2,18 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 # --------------------------------------------------------------------------
-import os
 import shutil
 from pathlib import Path
+from test.integ_test.utils import download_azure_blob
 from zipfile import ZipFile
 
-from azure.storage.blob import BlobClient
 from torchvision import datasets
 from torchvision.transforms import ToTensor
 
 from olive.evaluator.metric import AccuracySubType, LatencySubType, Metric, MetricType
 from olive.systems.docker import DockerSystem, LocalDockerConfig
+
+# pylint: disable=redefined-outer-name
 
 
 def get_directories():
@@ -38,13 +39,12 @@ def get_accuracy_metric(post_process, dataloader_func="create_dataloader"):
         "data_dir": data_dir,
         "dataloader_func": dataloader_func,
     }
-    accuracy_metric = Metric(
+    return Metric(
         name="accuracy",
         type=MetricType.ACCURACY,
         sub_types=[{"name": AccuracySubType.ACCURACY_SCORE}],
         user_config=accuracy_metric_config,
     )
-    return accuracy_metric
 
 
 def get_latency_metric(dataloader_func="create_dataloader"):
@@ -53,13 +53,12 @@ def get_latency_metric(dataloader_func="create_dataloader"):
         "data_dir": data_dir,
         "dataloader_func": dataloader_func,
     }
-    latency_metric = Metric(
+    return Metric(
         name="latency",
         type=MetricType.LATENCY,
         sub_types=[{"name": LatencySubType.AVG}],
         user_config=latency_metric_config,
     )
-    return latency_metric
 
 
 def download_models():
@@ -107,19 +106,6 @@ def get_onnx_model():
 
 def get_openvino_model():
     return {"model_path": str(models_dir / "openvino")}
-
-
-def download_azure_blob(container, blob, download_path):
-    try:
-        conn_str = os.environ["OLIVEWHEELS_STORAGE_CONNECTION_STRING"]
-    except KeyError:
-        raise Exception("Please set the environment variable OLIVEWHEELS_STORAGE_CONNECTION_STRING")
-
-    blob = BlobClient.from_connection_string(conn_str=conn_str, container_name=container, blob_name=blob)
-
-    with open(download_path, "wb") as my_blob:
-        blob_data = blob.download_blob()
-        blob_data.readinto(my_blob)
 
 
 def delete_directories():

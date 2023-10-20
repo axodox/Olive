@@ -1,0 +1,89 @@
+{
+    "azureml_client": {
+        "subscription_id": "<place_holder>",
+        "resource_group": "<place_holder>",
+        "workspace_name": "<place_holder>"
+    },
+    "input_model":{
+        "type": "PyTorchModel",
+        "config": {
+            "model_path": {
+                "type": "azureml_model",
+                "config": {
+                    "name": "bert-hf",
+                    "version": "3"
+                }
+            },
+            "hf_config": {
+                "model_name": "Intel/bert-base-uncased-mrpc",
+                "task": "text-classification",
+                "dataset": {
+                    "data_name":"glue",
+                    "subset": "mrpc",
+                    "split": "validation",
+                    "input_cols": ["sentence1", "sentence2"],
+                    "label_cols": ["label"],
+                    "batch_size": 1
+                }
+            }
+        }
+    },
+    "evaluators": {
+        "common_evaluator": {
+            "metrics":[
+                {
+                    "name": "accuracy",
+                    "type": "accuracy",
+                    "sub_types": [
+                        {"name": "accuracy_score", "priority": 1}
+                    ]
+                },
+                {
+                    "name": "latency",
+                    "type": "latency",
+                    "sub_types": [
+                        {"name": "avg", "priority": 2}
+                    ]
+                }
+            ]
+        }
+    },
+    "passes": {
+        "conversion": {
+            "type": "OnnxConversion",
+            "config": {
+                "target_opset": 13
+            }
+        },
+        "transformers_optimization": {
+            "type": "OrtTransformersOptimization",
+            "config": {
+                "float16": false,
+                "only_onnxruntime": false
+            }
+        },
+        "quantization": {
+            "type": "OnnxQuantization",
+            "config": {
+                "quant_preprocess": true,
+                "per_channel": false,
+                "reduce_range": false,
+                "calibrate_method": "MinMax",
+                "data_config": "__input_model_data_config__"
+            }
+        },
+        "perf_tuning": {
+            "type": "OrtPerfTuning",
+            "config": {
+                "data_config": "__input_model_data_config__"
+            }
+        }
+    },
+    "engine": {
+        "search_strategy": false,
+        "execution_providers": ["CPUExecutionProvider"],
+        "evaluator": "common_evaluator",
+        "cache_dir": "cache",
+        "output_dir": "models/bert_hf_cpu_aml"
+    }
+}

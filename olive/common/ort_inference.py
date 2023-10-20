@@ -1,3 +1,7 @@
+# -------------------------------------------------------------------------
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
+# --------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, Union
 
@@ -5,9 +9,7 @@ from typing import Dict, Union
 def get_ort_inference_session(
     model_path: Union[Path, str], inference_settings: Dict[str, any], use_ort_extensions: bool = False
 ):
-    """
-    Get an ONNXRuntime inference session.
-    """
+    """Get an ONNXRuntime inference session."""
     import onnxruntime as ort
 
     sess_options = ort.SessionOptions()
@@ -43,8 +45,8 @@ def get_ort_inference_session(
             sess_options.add_session_config_entry(key, value)
 
     if isinstance(execution_provider, list):
-        # execution_provider may be a list of tuples where the first item in each tuple is the EP name
-        execution_provider = [i[0] if isinstance(i, tuple) else i for i in execution_provider]
+        # execution_provider may be a list of tuples/lists where the first item in each tuple is the EP name
+        execution_provider = [i[0] if isinstance(i, (tuple, list)) else i for i in execution_provider]
     elif isinstance(execution_provider, str):
         execution_provider = [execution_provider]
 
@@ -61,7 +63,6 @@ def get_ort_inference_session(
     provider_options = inference_settings.get("provider_options")
 
     # create session
-    sess = ort.InferenceSession(
+    return ort.InferenceSession(
         str(model_path), sess_options=sess_options, providers=execution_provider, provider_options=provider_options
     )
-    return sess
