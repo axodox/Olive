@@ -9,14 +9,13 @@ import tempfile
 from abc import abstractmethod
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, ClassVar, Dict, Optional, Type, Union
-
-from pydantic import Field, validator
+from typing import Any, Callable, ClassVar, Dict, List, Optional, Type, Union
 
 from olive.azureml.azureml_client import AzureMLClientConfig
 from olive.common.auto_config import AutoConfigClass
 from olive.common.config_utils import ConfigBase, ConfigParam, serialize_to_json, validate_config
-from olive.common.utils import retry_func
+from olive.common.pydantic_v1 import Field, validator
+from olive.common.utils import copy_dir, retry_func
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +33,12 @@ class ResourceType(str, Enum):
         return self.value
 
 
-LOCAL_RESOURCE_TYPES = [ResourceType.LocalFile, ResourceType.LocalFolder]
-AZUREML_RESOURCE_TYPES = [
+LOCAL_RESOURCE_TYPES = (ResourceType.LocalFile, ResourceType.LocalFolder)
+AZUREML_RESOURCE_TYPES = (
     ResourceType.AzureMLModel,
     ResourceType.AzureMLDatastore,
     ResourceType.AzureMLJobOutput,
-]
+)
 
 
 class ResourcePath(AutoConfigClass):
@@ -50,7 +49,7 @@ class ResourcePath(AutoConfigClass):
         return self.get_path()
 
     @property
-    def type(self) -> ResourceType:  # noqa: A003
+    def type(self) -> ResourceType:
         return self.name
 
     @abstractmethod
@@ -93,7 +92,7 @@ class ResourcePath(AutoConfigClass):
 
 
 class ResourcePathConfig(ConfigBase):
-    type: ResourceType = Field(..., description="Type of the resource.")  # noqa: A003
+    type: ResourceType = Field(..., description="Type of the resource.")
     config: ConfigBase = Field(..., description="Config of the resource.")
 
     @validator("config", pre=True)
@@ -110,7 +109,7 @@ class ResourcePathConfig(ConfigBase):
 
 def create_resource_path(
     resource_path: Optional[Union[str, Path, Dict[str, Any], ResourcePathConfig, ResourcePath]]
-) -> Optional[ResourcePath]:
+) -> Optional[Union[ResourcePath, List[ResourcePath]]]:
     """Create a resource path from a string or a dict.
 
     If a string is provided, it is inferred to be a file, folder, or string name.
@@ -220,7 +219,7 @@ class LocalResourcePath(ResourcePath):
         if is_file:
             shutil.copy(self.config.path, new_path)
         else:
-            shutil.copytree(self.config.path, new_path)
+            copy_dir(self.config.path, new_path)
 
         return str(new_path)
 

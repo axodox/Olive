@@ -32,7 +32,16 @@
                     "name": "latency",
                     "type": "latency",
                     "sub_types": [
-                        {"name": "avg", "priority": 2, "goal": {"type": "percent-min-improvement", "value": 5}},
+                        {"name": "avg", "priority": 2, "goal": {"type": "percent-min-improvement", "value": 0.1}},
+                        {"name": "max"},
+                        {"name": "min"}
+                    ]
+                },
+                {
+                    "name": "throughput",
+                    "type": "throughput",
+                    "sub_types": [
+                        {"name": "avg"},
                         {"name": "max"},
                         {"name": "min"}
                     ]

@@ -10,12 +10,20 @@ The `OnnxConversion` pass converts PyTorch models to ONNX using
 
 Please refer to [OnnxConversion](onnx_conversion) for more details about the pass and its config parameters.
 
+Besides, if you want to convert a existing ONNX model with another target opset, you can use [OnnxOpVersionConversion](onnx_op_version_conversion) pass, similar configs with above case:
+
 ### Example Configuration
 ```json
  {
     "type": "OnnxConversion",
     "config": {
         "target_opset": 13
+    }
+ },
+ {
+    "type": "OnnxOpVersionConversion",
+    "config": {
+        "target_opset": 14
     }
  }
 ```
@@ -315,7 +323,21 @@ improve performance.
     "config": {
         "user_script": "user_script.py",
         "dataloader_func": "create_dataloader",
-        "batch_size": 1
+        "batch_size": 1,
+        "providers_list" : [
+            [
+                "CUDAExecutionProvider",
+                {
+                    "device_id": 0,
+                    "arena_extend_strategy": "kNextPowerOfTwo",
+                    "gpu_mem_limit": 2147483648, // 2 * 1024 * 1024 * 1024,
+                    "cudnn_conv_algo_search": "EXHAUSTIVE",
+                    "do_copy_in_default_stream": true,
+                },
+            ],
+            "CPUExecutionProvider",
+        ],
+        "enable_profiling": false,
     }
 }
 ```

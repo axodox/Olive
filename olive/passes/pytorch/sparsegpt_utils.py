@@ -13,14 +13,14 @@ import torch
 import transformers
 
 from olive.common.utils import get_attr
-from olive.model.hf_mappings import MODELS_TO_EMBEDDINGS_MAPPING, MODELS_TO_LAYERS_MAPPING
+from olive.model.utils.hf_mappings import MODELS_TO_EMBEDDINGS_MAPPING, MODELS_TO_LAYERS_MAPPING
 
 logger = logging.getLogger(__name__)
 
 # ruff: noqa: N802, N806, RUF100
 
 # model types supported by SparseGPT
-supported_models = ["bloom", "gpt2", "gpt_neox", "llama", "opt"]
+supported_models = ("bloom", "gpt2", "gpt_neox", "llama", "opt")
 
 # additional inputs to the layers for each model type
 # all model types are expected to have "input_ids" and "attention_mask"

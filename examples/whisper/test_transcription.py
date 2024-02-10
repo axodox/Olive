@@ -14,12 +14,13 @@ from prepare_whisper_configs import download_audio_test_data
 
 from olive.evaluator.olive_evaluator import OnnxEvaluator
 from olive.hardware import AcceleratorSpec
-from olive.model import ONNXModel
+from olive.model import ONNXModelHandler
 
 sys.path.append(str(Path(__file__).parent / "code"))
 
+# ruff: noqa: T201
 # pylint: disable=wrong-import-position, wrong-import-order
-from whisper_dataset import WhisperDataset  # noqa: E402
+from whisper_dataset import WhisperDataset
 
 
 def get_args(raw_args):
@@ -39,6 +40,11 @@ def get_args(raw_args):
         choices=["transcribe", "translate"],
         help="whether to perform X->X speech recognition ('transcribe') or X->English translation ('translate')",
     )
+    parser.add_argument(
+        "--predict_timestamps",
+        action="store_true",
+        help="Whether to predict timestamps. Only possible for models generated with `--enable_timestamps`",
+    )
     return parser.parse_args(raw_args)
 
 
@@ -54,10 +60,20 @@ def main(raw_args=None):
         config = json.load(f)
 
     # get model information
+    model_name = config["input_model"]["config"]["hf_config"]["model_name"]
     use_audio_decoder = config["passes"]["prepost"]["config"]["tool_command_args"]["use_audio_decoder"]
+    # check if model is multilingual
     multilingual = config["passes"]["insert_beam_search"]["config"].get("use_forced_decoder_ids", False)
     if not multilingual and not (args.language == "english" and args.task == "transcribe"):
         print("Model is not multilingual but custom language/task provided. Will ignore custom language/task.")
+    # check if model supports predicting timestamps
+    timestamp_enabled = config["passes"]["insert_beam_search"]["config"].get("use_logits_processor", False)
+    if args.predict_timestamps and not timestamp_enabled:
+        print(
+            "Model does not support predicting timestamps. Will ignore `--predict_timestamps`. Generate model with"
+            " `--enable_timestamps` to support predicting timestamps."
+        )
+        args.predict_timestamps = False
 
     # get device and ep
     device = config["systems"]["local_system"]["config"]["accelerators"][0]
@@ -74,7 +90,7 @@ def main(raw_args=None):
         break
 
     # load output model onnx
-    olive_model = ONNXModel(**output_model_json["config"])
+    olive_model = ONNXModelHandler(**output_model_json["config"])
 
     # load audio data
     if not args.audio_path:
@@ -89,10 +105,12 @@ def main(raw_args=None):
     # dataset
     dataset = WhisperDataset(
         data_dir=temp_dir_path,
+        model_name=model_name,
         use_audio_decoder=use_audio_decoder,
         file_ext=temp_audio_path.suffix,
         language=args.language,
         task=args.task,
+        predict_timestamps=args.predict_timestamps,
     )
 
     # create inference session

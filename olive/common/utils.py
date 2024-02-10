@@ -13,6 +13,7 @@ import shlex
 import shutil
 import subprocess
 import time
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -20,18 +21,28 @@ logger = logging.getLogger(__name__)
 def run_subprocess(cmd, env=None, cwd=None, check=False):  # pragma: no cover
     logger.debug(f"Running command: {cmd} with env: {env}")
 
+    assert isinstance(cmd, (str, list)), f"cmd must be a string or a list, got {type(cmd)}."
     windows = platform.system() == "Windows"
-    cmd = shlex.split(cmd, posix=not windows)
+    if isinstance(cmd, str):
+        cmd = shlex.split(cmd, posix=not windows)
     if windows:
         path = env.get("PATH") if env else None
         cmd_exe = shutil.which(cmd[0], path=path)
         cmd[0] = cmd_exe
-    out = subprocess.run(cmd, env=env, cwd=cwd, capture_output=True, check=False)
+    try:
+        out = subprocess.run(cmd, env=env, cwd=cwd, capture_output=True, check=check)
+    except subprocess.CalledProcessError as e:
+        err_msg = [
+            f"Failed to run {cmd} with returncode {e.returncode}!",
+            f"Stderr: {e.stderr.decode('utf-8')}",
+            f"Stdout: {e.stdout.decode('utf-8')}",
+            f"Env: {env}",
+        ]
+        logger.error("\n".join(err_msg))  # noqa: TRY400
+        raise
     returncode = out.returncode
     stdout = out.stdout.decode("utf-8")
     stderr = out.stderr.decode("utf-8")
-    if check and returncode != 0:
-        raise RuntimeError(f"Command '{cmd}' failed with return code {returncode} and error: {stderr}")
 
     return returncode, stdout, stderr
 
@@ -41,7 +52,7 @@ def get_package_name_from_ep(execution_provider):
         "CPUExecutionProvider": ("onnxruntime", "ort-nightly"),
         "CUDAExecutionProvider": ("onnxruntime-gpu", "ort-nightly-gpu"),
         "TensorrtExecutionProvider": ("onnxruntime-gpu", "ort-nightly-gpu"),
-        "RocmExecutionProvider": ("onnxruntime-gpu", "ort-nightly-gpu"),
+        "ROCMExecutionProvider": ("onnxruntime-gpu", "ort-nightly-gpu"),
         "OpenVINOExecutionProvider": ("onnxruntime-openvino", None),
         "DmlExecutionProvider": ("onnxruntime-directml", "ort-nightly-directml"),
     }
@@ -130,6 +141,7 @@ def retry_func(func, args=None, kwargs=None, max_tries=3, delay=5, backoff=2, ex
         backoff: Backoff multiplier e.g. value of 2 will double the delay each retry.
         exceptions: Exceptions to catch. If None, catch all exceptions. Can be a single exception or a tuple
             of exceptions.
+
     """
     args = args or []
     kwargs = kwargs or {}
@@ -141,11 +153,11 @@ def retry_func(func, args=None, kwargs=None, max_tries=3, delay=5, backoff=2, ex
             out = func(*args, **kwargs)
             logger.debug("Succeeded.")
             return out
-        except exceptions as e:
+        except exceptions:
             num_tries += 1
             if num_tries == max_tries:
-                logger.error(f"Failed with error: {e}", exc_info=True)
-                raise e
+                logger.exception("The operation failed after the maximum number of retries.")
+                raise
             logger.debug(f"Failed. Retrying in {sleep_time} seconds...")
             time.sleep(sleep_time)
             sleep_time *= backoff
@@ -172,6 +184,24 @@ def tensor_data_to_device(data, device: str):
         return data
 
 
+def resolve_torch_dtype(dtype):
+    """Get torch dtype from string or torch dtype.
+
+    :param dtype: dtype to resolve. Can be a string (float16, torch.float16, etc) or torch dtype.
+    :return: torch dtype.
+    """
+    import torch
+
+    if isinstance(dtype, str):
+        dtype = dtype.replace("torch.", "")
+        try:
+            dtype = getattr(torch, dtype)
+        except AttributeError as e:
+            raise AttributeError(f"Invalid dtype '{dtype}'.") from e
+    assert isinstance(dtype, torch.dtype), f"dtype must be a string or torch.dtype, got {type(dtype)}."
+    return dtype
+
+
 def get_attr(module, attr, fail_on_not_found=False):
     """Get attribute from module.
 
@@ -196,3 +226,93 @@ def get_attr(module, attr, fail_on_not_found=False):
                 logger.warning(not_found_message)
                 return None
     return module
+
+
+def find_submodules(module, submodule_types, full_name=False):
+    """Find all submodules of a given type in a module.
+
+    :param module: module to search.
+    :param submodule_type: type of submodule to search for. Can be a single type or a tuple of types.
+    :param full_name: if True, return full name of submodule. Otherwise, return last part of submodule name.
+    :return: list of submodules names.
+    """
+    submodules = set()
+    for name, submodule in module.named_modules():
+        if isinstance(submodule, submodule_types):
+            if full_name:
+                submodules.add(name)
+            else:
+                submodules.add(name.split(".")[-1])
+    return list(submodules) if submodules else None
+
+
+def huggingface_login(token: str):
+    from huggingface_hub import login
+
+    login(token=token)
+
+
+def aml_runner_hf_login():
+    import os
+
+    hf_login = os.environ.get("HF_LOGIN")
+    if hf_login:
+        from azure.identity import DefaultAzureCredential
+        from azure.keyvault.secrets import SecretClient
+
+        keyvault_name = os.environ.get("KEYVAULT_NAME")
+        logger.debug(f"Getting token from keyvault {keyvault_name}")
+
+        credential = DefaultAzureCredential()
+        secret_client = SecretClient(vault_url=f"https://{keyvault_name}.vault.azure.net/", credential=credential)
+        token = secret_client.get_secret("hf-token").value
+        huggingface_login(token)
+
+
+def all_files(path, ignore=None):
+    """Find all files in a directory recursively, optionally ignoring some paths.
+
+    :param path: The path to the directory to search. Can be a string or a `Path` object.
+    :param ignore: A callable similar to `ignore` parameter of `shutil.copytree`.
+        E.g. `shutil.ignore_patterns('__pycache__')`.
+    :return: A generator of `Path` objects.
+    """
+    for member in Path(path).iterdir():
+        ignored = ignore(path, [member.name]) if ignore else set()
+        if member.name in ignored:
+            continue
+        if member.is_dir():
+            yield from all_files(member, ignore)
+        else:
+            yield member
+
+
+def copy_dir(src_dir, dst_dir, ignore=None, **kwargs):
+    """Copy a directory recursively using `shutil.copytree`.
+
+    Handles shutil.Error exceptions that happen even though all files were copied successfully.
+
+    :param src_dir: The source directory. Can be a string or a `Path` object.
+    :param dst_dir: The destination directory. Can be a string or a `Path` object.
+    :param ignore: A callable that is used as `ignore` parameter to `shutil.copytree`.
+    :param kwargs: Additional kwargs to pass to `shutil.copytree`.
+    """
+    try:
+        shutil.copytree(src_dir, dst_dir, ignore=ignore, **kwargs)
+    except shutil.Error as e:
+        src_dir = Path(src_dir).resolve()
+        dst_dir = Path(dst_dir).resolve()
+        # Check if all files were copied successfully
+        # only check files names so it is not foolproof
+        not_copied = [
+            member.relative_to(src_dir)
+            for member in all_files(src_dir, ignore)
+            if not (dst_dir / member.relative_to(src_dir)).exists()
+        ]
+        if not_copied:
+            raise RuntimeError(f"Failed to copy {not_copied}") from e
+        else:
+            logger.warning(
+                f"Received shutil.Error '{e}' but all required file names exist in destination directory. "
+                "Assuming all files were copied successfully and continuing."
+            )

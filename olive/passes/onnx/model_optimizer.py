@@ -3,6 +3,7 @@
 # Licensed under the MIT License.
 # --------------------------------------------------------------------------
 import logging
+from pathlib import Path
 from typing import Any, Dict
 
 import numpy as np
@@ -10,7 +11,8 @@ import onnx
 from google.protobuf.message import Message
 
 from olive.hardware.accelerator import AcceleratorSpec, Device
-from olive.model import ONNXModel
+from olive.model import ONNXModelHandler
+from olive.model.utils import resolve_onnx_path
 from olive.passes import Pass
 from olive.passes.onnx.common import get_external_data_config, model_proto_to_olive_model
 from olive.passes.pass_config import PassConfigParam
@@ -30,13 +32,11 @@ class ModelOptimizer:
         self.onnx_model = TransformersOnnxModel(self.model)
         self.graph = self.onnx_model.graph()
 
-        node_idx = 0
         self.node_name2module = {}
 
-        for node in self.graph.node:
+        for node_idx, node in enumerate(self.graph.node):
             if node.name == "":
                 node.name = str(node.op_type) + str(node_idx)
-            node_idx += 1
             self.node_name2module[node.name] = [node, node_idx]
 
     def optimize(self):
@@ -46,25 +46,24 @@ class ModelOptimizer:
         for module in self.node_name2module.values():
             node = module[0]
             node_index = module[1]
-            if node.op_type == "Transpose":
-                if "DequantizeLinear" in node.input[0]:
-                    dequant_node_name = node.input[0][:-9]
-                    new_dequant_node_output = node.output[0]
-                    dequant_node = self.node_name2module[dequant_node_name][0]
-                    x_node = self.node_name2module[dequant_node.input[0][:-9]][0]
-                    x_scale_node = self.node_name2module[dequant_node.input[1][:-9]][0]
-                    x_zero_point_node = self.node_name2module[dequant_node.input[2][:-9]][0]
+            if node.op_type == "Transpose" and "DequantizeLinear" in node.input[0]:
+                dequant_node_name = node.input[0][:-9]
+                new_dequant_node_output = node.output[0]
+                dequant_node = self.node_name2module[dequant_node_name][0]
+                x_node = self.node_name2module[dequant_node.input[0][:-9]][0]
+                x_scale_node = self.node_name2module[dequant_node.input[1][:-9]][0]
+                x_zero_point_node = self.node_name2module[dequant_node.input[2][:-9]][0]
 
-                    x_val = self.onnx_model.get_constant_value(dequant_node.input[0])
-                    new_x_val = np.transpose(x_val, axes=(1, 0))
-                    x_scale_val = self.onnx_model.get_constant_value(dequant_node.input[1])
-                    x_zero_point_val = self.onnx_model.get_constant_value(dequant_node.input[2])
+                x_val = self.onnx_model.get_constant_value(dequant_node.input[0])
+                new_x_val = np.transpose(x_val, axes=(1, 0))
+                x_scale_val = self.onnx_model.get_constant_value(dequant_node.input[1])
+                x_zero_point_val = self.onnx_model.get_constant_value(dequant_node.input[2])
 
-                    self.remove_nodes(self.graph, [node, dequant_node, x_node, x_scale_node, x_zero_point_node])
-                    new_dequant, x, x_scale, x_zero_point = self.create_dequantizelinear_node(
-                        new_x_val, x_scale_val, x_zero_point_val, new_dequant_node_output, node_index
-                    )
-                    self.add_nodes(self.graph, [new_dequant, x, x_scale, x_zero_point], node_index)
+                self.remove_nodes(self.graph, [node, dequant_node, x_node, x_scale_node, x_zero_point_node])
+                new_dequant, x, x_scale, x_zero_point = self.create_dequantizelinear_node(
+                    new_x_val, x_scale_val, x_zero_point_val, new_dequant_node_output, node_index
+                )
+                self.add_nodes(self.graph, [new_dequant, x, x_scale, x_zero_point], node_index)
 
     def create_dequantizelinear_node(self, x_val, x_scale_val, x_zero_point_val, outputs, node_name_suffix):
         x_tensor = onnx.helper.make_tensor(
@@ -225,9 +224,9 @@ class OnnxModelOptimizer(Pass):
         return get_external_data_config()
 
     def _run_for_config(
-        self, model: ONNXModel, data_root: str, config: Dict[str, Any], output_model_path: str
-    ) -> ONNXModel:
-        output_model_path = ONNXModel.resolve_path(output_model_path)
+        self, model: ONNXModelHandler, data_root: str, config: Dict[str, Any], output_model_path: str
+    ) -> ONNXModelHandler:
+        output_model_path = resolve_onnx_path(output_model_path, Path(model.model_path).name)
 
         # optimize model
         model_optimizer = ModelOptimizer(model.model_path)

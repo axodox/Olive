@@ -3,18 +3,17 @@
 # Licensed under the MIT License.
 # --------------------------------------------------------------------------
 import platform
-import tempfile
 
 import pytest
 
 from olive.engine import Engine
 from olive.evaluator.olive_evaluator import OliveEvaluatorConfig
 from olive.hardware import Device
-from olive.hardware.accelerator import DEFAULT_CPU_ACCELERATOR, AcceleratorSpec
+from olive.hardware.accelerator import DEFAULT_CPU_ACCELERATOR, AcceleratorSpec, create_accelerators
 from olive.model import ModelConfig
 from olive.passes.onnx import OrtPerfTuning
 
-# pylint: disable=attribute-defined-outside-init, consider-using-with
+# pylint: disable=attribute-defined-outside-init
 
 
 @pytest.mark.skipif(platform.system() == "Windows", reason="Docker target does not support windows")
@@ -34,18 +33,17 @@ class TestOliveManagedDockerSystem:
         )
         download_data()
 
-    def test_run_pass_evaluate(self):
+    def test_run_pass_evaluate(self, tmpdir):
         from test.multiple_ep.utils import get_latency_metric
 
-        temp_dir = tempfile.TemporaryDirectory()
-        output_dir = temp_dir.name
+        output_dir = tmpdir
 
         metric = get_latency_metric()
         evaluator_config = OliveEvaluatorConfig(metrics=[metric])
-        options = {"execution_providers": self.execution_providers}
-        engine = Engine(options, target=self.system, evaluator_config=evaluator_config)
+        engine = Engine(target=self.system, evaluator_config=evaluator_config)
+        accelerator_specs = create_accelerators(self.system, self.execution_providers)
         engine.register(OrtPerfTuning)
-        output = engine.run(self.input_model_config, output_dir=output_dir)
+        output = engine.run(self.input_model_config, accelerator_specs, output_dir=output_dir)
         cpu_res = next(iter(output[DEFAULT_CPU_ACCELERATOR].nodes.values()))
         openvino_res = next(
             iter(

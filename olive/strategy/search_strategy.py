@@ -4,19 +4,20 @@
 # --------------------------------------------------------------------------
 import logging
 from copy import deepcopy
-from typing import Any, Dict, List, Optional, Tuple, Union
-
-from pydantic import validator
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from olive.common.config_utils import ConfigBase, validate_config
-from olive.evaluator.metric import MetricResult
+from olive.common.pydantic_v1 import validator
 from olive.strategy.search_algorithm import REGISTRY, SearchAlgorithm
-from olive.strategy.search_parameter import SearchParameter
 from olive.strategy.search_results import SearchResults
+
+if TYPE_CHECKING:
+    from olive.evaluator.metric import MetricResult
+    from olive.strategy.search_parameter import SearchParameter
 
 logger = logging.getLogger(__name__)
 
-_VALID_EXECUTION_ORDERS = ["joint", "pass-by-pass"]
+_VALID_EXECUTION_ORDERS = ("joint", "pass-by-pass")
 
 # pylint: disable=attribute-defined-outside-init
 
@@ -68,7 +69,7 @@ class SearchStrategy:
 
     def initialize(
         self,
-        pass_flows_search_spaces: List[List[Tuple[str, Dict[str, SearchParameter]]]],
+        pass_flows_search_spaces: List[List[Tuple[str, Dict[str, "SearchParameter"]]]],
         init_model_id: str,
         objective_dict: Dict[str, dict],
     ):
@@ -116,9 +117,7 @@ class SearchStrategy:
             # run pass-by-pass for each pass flow which is defined as a list of registered passes
             search_spaces_groups = []
             for pass_flow_ss in search_space_names:
-                pass_flow_groups = []
-                for pass_ss in pass_flow_ss:
-                    pass_flow_groups.append([pass_ss])
+                pass_flow_groups = [[pass_ss] for pass_ss in pass_flow_ss]
                 search_spaces_groups.append(pass_flow_groups)
         else:
             raise ValueError(f"Unknown execution order: {self._config.execution_order}")
@@ -244,7 +243,7 @@ class SearchStrategy:
     def record_feedback_signal(
         self,
         search_point: Dict[str, Dict[str, Any]],
-        signal: MetricResult,
+        signal: "MetricResult",
         model_ids: List[str],
         should_prune: bool = False,
     ):

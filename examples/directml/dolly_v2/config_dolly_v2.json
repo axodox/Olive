@@ -1,9 +1,11 @@
 {
     "input_model":{
-        "type": "OptimumModel",
+        "type": "PyTorchModel",
         "config": {
-            "model_path": "databricks/dolly-v2-7b",
-            "model_components": ["decoder_model.onnx", "decoder_with_past_model.onnx"]
+            "hf_config": {
+                "model_name": "databricks/dolly-v2-7b",
+                "task": "text-generation"
+            }
         }
     },
     "systems": {
@@ -35,15 +37,18 @@
             "type": "OptimumConversion",
             "config": {
                 "target_opset": 14,
-                "save_as_external_data": true,
-                "all_tensors_to_one_file": true
+                "components": ["decoder_model", "decoder_with_past_model"],
+                "extra_args": {
+                    "legacy": true,
+                    "no_post_process": true
+                }
             }
         },
         "optimize": {
             "type": "OrtTransformersOptimization",
-            "disable_search": true,
             "config": {
                 "model_type": "gpt2",
+                "opt_level": 0,
                 "float16": true,
                 "use_gpu": false,
                 "keep_io_types": true,
@@ -76,10 +81,6 @@
         }
     },
     "engine": {
-        "search_strategy": {
-            "execution_order": "joint",
-            "search_algorithm": "exhaustive"
-        },
         "evaluator": "common_evaluator",
         "evaluate_input_model": false,
         "host": "local_system",

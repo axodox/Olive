@@ -8,13 +8,12 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Callable, ClassVar, Dict, Optional, Tuple, Type, Union, get_args
 
-from pydantic import validator
-
 from olive.common.config_utils import ConfigBase, ParamCategory, validate_config
+from olive.common.pydantic_v1 import validator
 from olive.common.user_module_loader import UserModuleLoader
 from olive.data.config import DataConfig
 from olive.hardware import DEFAULT_CPU_ACCELERATOR, AcceleratorSpec
-from olive.model import CompositeOnnxModel, DistributedOnnxModel, OliveModel
+from olive.model import CompositeModelHandler, DistributedOnnxModelHandler, OliveModelHandler
 from olive.passes.pass_config import (
     PassConfigBase,
     PassConfigParam,
@@ -201,6 +200,7 @@ class Pass(ABC):
                     description="param6 description",
                 ),
             }
+
         """
         raise NotImplementedError
 
@@ -259,9 +259,12 @@ class Pass(ABC):
             if isinstance(value, SearchParameter):
                 search_space[key] = value
             else:
-                if default_config[key].category == ParamCategory.PATH and value is not None:
-                    if not isinstance(value, ResourcePath):
-                        value = str(Path(value).resolve())
+                if (
+                    default_config[key].category == ParamCategory.PATH
+                    and value is not None
+                    and not isinstance(value, ResourcePath)
+                ):
+                    value = str(Path(value).resolve())
                 fixed_params[key] = value
         assert not cyclic_search_space(search_space), "Search space is cyclic."
         # TODO(jambayk): better error message, e.g. which parameters are invalid, how they are invalid
@@ -326,14 +329,14 @@ class Pass(ABC):
 
     @abstractmethod
     def _run_for_config(
-        self, model: OliveModel, data_root: str, config: Dict[str, Any], output_model_path: str
-    ) -> OliveModel:
+        self, model: OliveModelHandler, data_root: str, config: Dict[str, Any], output_model_path: str
+    ) -> OliveModelHandler:
         """Run the pass on the model with the given configuration."""
         raise NotImplementedError
 
     def run(
-        self, model: OliveModel, data_root: str, output_model_path: str, point: Optional[Dict[str, Any]] = None
-    ) -> OliveModel:
+        self, model: OliveModelHandler, data_root: str, output_model_path: str, point: Optional[Dict[str, Any]] = None
+    ) -> OliveModelHandler:
         """Run the pass on the model at a specific point in the search space."""
         point = point or {}
         config = self.config_at_search_point(point)
@@ -343,26 +346,33 @@ class Pass(ABC):
             self._initialized = True
 
         # Optimization pass still works on individual graphs.
-        if isinstance(model, DistributedOnnxModel):
-            output_filepaths = []
-            for rank in range(model.ranks):
-                input_rank_model = model.load_model(rank)
-                rank_output_path = Path(output_model_path).with_suffix("") / str(rank)
-                output_rank_model = self._run_for_config(input_rank_model, data_root, config, rank_output_path)
-                output_filepaths.append(output_rank_model.model_path)
-            output_model = DistributedOnnxModel(output_filepaths, inference_settings=model.inference_settings)
-        elif isinstance(model, CompositeOnnxModel) and not self._accepts_composite_model:
+        if isinstance(model, DistributedOnnxModelHandler):
+            for rank in range(model.num_ranks):
+                input_ranked_model = model.load_model(rank)
+                ranked_output_path = Path(output_model_path).with_suffix("") / model.ranked_model_name(rank)
+                self._run_for_config(input_ranked_model, data_root, config, str(ranked_output_path))
+
+            output_model = DistributedOnnxModelHandler(
+                model_path=str(Path(output_model_path).with_suffix("")),
+                model_name_pattern=model.model_name_pattern,
+                num_ranks=model.num_ranks,
+                inference_settings=model.inference_settings,
+            )
+        elif isinstance(model, CompositeModelHandler) and not self._accepts_composite_model:
+            # CompositePyTorchModel is also handled here.
             components = []
             component_names = []
-            for cidx, child in enumerate(model.get_model_components()):
-                component_output_path = Path(output_model_path).with_suffix("") / str(cidx)
-                output_model_component = self._run_for_config(child, data_root, config, str(component_output_path))
+            for component_name, component_model in model.get_model_components():
+                component_output_path = Path(output_model_path).with_suffix("") / component_name
+                output_model_component = self._run_for_config(
+                    component_model, data_root, config, str(component_output_path)
+                )
                 output_model_component.model_attributes = (
-                    output_model_component.model_attributes or child.model_attributes
+                    output_model_component.model_attributes or component_model.model_attributes
                 )
                 components.append(output_model_component)
-                component_names.append(model.get_model_component_name(cidx))
-            output_model = CompositeOnnxModel(components, component_names)
+                component_names.append(component_name)
+            output_model = CompositeModelHandler(components, component_names)
         else:
             output_model = self._run_for_config(model, data_root, config, output_model_path)
         # assumption: the model attributes from passes, if any, are more important than
@@ -386,7 +396,7 @@ class Pass(ABC):
 
 # TODO(jambayk): rename. We are using FullPassConfig since PassConfigBase already refers to inner config
 class FullPassConfig(ConfigBase):
-    type: str  # noqa: A003
+    type: str
     disable_search: bool = False
     accelerator: Dict[str, str] = None
     config: Dict[str, Any] = None

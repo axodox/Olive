@@ -13,10 +13,11 @@ import config
 import onnxruntime as ort
 from packaging import version
 
-from olive.model import CompositeOnnxModel, ONNXModel
+from olive.model import CompositeModelHandler, ONNXModelHandler
 from olive.workflows import run as olive_run
 
 # pylint: disable=redefined-outer-name
+# ruff: noqa: T201
 
 
 def optimize(model_name: str, optimized_model_dir: Path):
@@ -55,10 +56,11 @@ def optimize(model_name: str, optimized_model_dir: Path):
             elif footprint["from_pass"] == "OptimumMerging":
                 merger_footprint = footprint
 
-        assert conversion_footprint and merger_footprint
+        assert conversion_footprint
+        assert merger_footprint
 
-        unopimized_olive_model = CompositeOnnxModel(**conversion_footprint["model_config"]["config"])
-        optimized_olive_model = ONNXModel(**merger_footprint["model_config"]["config"])
+        unopimized_olive_model = CompositeModelHandler(**conversion_footprint["model_config"]["config"])
+        optimized_olive_model = ONNXModelHandler(**merger_footprint["model_config"]["config"])
 
         model_info = {
             "unoptimized": {

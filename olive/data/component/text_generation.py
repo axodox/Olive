@@ -10,9 +10,9 @@ from typing import Callable, Dict, List, Union
 
 import torch
 import transformers
-from pydantic import validator
 
 from olive.common.config_utils import ConfigBase, validate_config, validate_object
+from olive.common.pydantic_v1 import validator
 from olive.common.user_module_loader import UserModuleLoader
 from olive.data.component.dataset import BaseDataset
 from olive.data.constants import IGNORE_INDEX
@@ -542,7 +542,9 @@ def append_text_gen_input_ids(
     # create attention_mask
     if use_attention_mask:
         attention_mask = (
-            torch.ones_like(input_ids) if tokenizer.pad_token_id is None else input_ids.ne(tokenizer.pad_token_id)
+            torch.ones_like(input_ids)
+            if tokenizer.pad_token_id is None
+            else input_ids.ne(tokenizer.pad_token_id).to(input_ids.dtype)  # is boolean otherwise
         )
         inputs["attention_mask"] = attention_mask
 
@@ -581,7 +583,6 @@ def format_pair_dataset(dataset, args):
     }
 
     if args.pair_format == TextGenPairFormat.ALPACA:
-        # pylint: disable=unnecessary-lambda
 
         def extract_alpaca_dataset(example):
             # extract new input from instruction and input
@@ -592,7 +593,7 @@ def format_pair_dataset(dataset, args):
             return {"input": prompt_format.formate(**example)}
 
         # extract new input from instruction and input
-        dataset = dataset.map(lambda x: extract_alpaca_dataset(x), remove_columns=["instruction"])
+        dataset = dataset.map(extract_alpaca_dataset, remove_columns=["instruction"])
     elif args.pair_format == TextGenPairFormat.CHIP2:
         # separate the human and bot text into input and output
         dataset = dataset.map(

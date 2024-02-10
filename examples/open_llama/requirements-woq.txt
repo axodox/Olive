@@ -1,7 +1,8 @@
 datasets
 # TODO: remove commit hash once update
-git+https://github.com/EleutherAI/lm-evaluation-harness.git@83dbfbf6070324f3e5872f63e49d49ff7ef4c9b3
-intel-extension-for-transformers>=1.2
+git+https://github.com/EleutherAI/lm-evaluation-harness.git@cc9778fbe4fa1a709be2abed9deb6180fd40e7e2
+intel-extension-for-transformers>=1.2.2
 neural-compressor>=2.3
 onnxruntime
 sentencepiece
+transformers

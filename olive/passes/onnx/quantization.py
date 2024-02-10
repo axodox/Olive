@@ -17,7 +17,8 @@ from olive.common.utils import hash_string
 from olive.data.config import DataConfig
 from olive.exception import OlivePassError
 from olive.hardware.accelerator import AcceleratorSpec
-from olive.model import ONNXModel
+from olive.model import ONNXModelHandler
+from olive.model.utils import resolve_onnx_path
 from olive.passes import Pass
 from olive.passes.onnx.common import get_external_data_config, model_proto_to_file, model_proto_to_olive_model
 from olive.passes.pass_config import ParamCategory, PassConfigParam
@@ -162,6 +163,10 @@ _static_dataloader_config = {
             required if quant_mode is 'static' and data_config is None.
         """,
     ),
+    "dataloader_func_kwargs": PassConfigParam(
+        type_=Dict[str, Any],
+        description="Keyword arguments for dataloader_func.",
+    ),
     "data_config": PassConfigParam(
         type_=Union[DataConfig, Dict],
         description="""
@@ -294,16 +299,20 @@ class OnnxQuantization(Pass):
                 and config["activation_type"] == "QInt8"
                 and config["quant_format"] == "QOperator"
             ):
-                logger.info("S8S8 with QOperator will be slow on x86-64 CPUs and should be avoided in general")
-                return False
+                # S8S8 with QOperator will be slow on x86-64 CPUs and should be avoided in general.
+                # https://onnxruntime.ai/docs/performance/model-optimizations/quantization.html#data-type-selection
+                # But we still allow it for users to try at their own risk. Olive just warns this to users.
+                logger.warning(
+                    "S8S8 with QOperator will be slow on x86-64 CPUs and should be avoided in general, try QDQ instead."
+                )
             if config["EnableSubgraph"] is True:
                 logger.info("EnableSubgraph is not supported for static quantization.")
                 return False
         return True
 
     def _run_for_config(
-        self, model: ONNXModel, data_root: str, config: Dict[str, Any], output_model_path: str
-    ) -> ONNXModel:
+        self, model: ONNXModelHandler, data_root: str, config: Dict[str, Any], output_model_path: str
+    ) -> ONNXModelHandler:
         from onnxruntime import __version__ as OrtVersion
         from onnxruntime.quantization import QuantFormat, QuantType, quantize_dynamic, quantize_static
         from onnxruntime.quantization.calibrate import CalibrationMethod
@@ -316,7 +325,7 @@ class OnnxQuantization(Pass):
                 config["dataloader_func"] or config["data_config"]
             ), "dataloader_func or data_config is required for static quantization."
 
-        output_model_path = ONNXModel.resolve_path(output_model_path)
+        output_model_path = resolve_onnx_path(output_model_path, Path(model.model_path).name)
 
         # extra config
         extra_options = deepcopy(config["extra_options"]) if config["extra_options"] else {}
@@ -346,10 +355,22 @@ class OnnxQuantization(Pass):
                 model = self._quant_preprocess(model, preprocessed_temp_model_path)
             else:
                 logger.info("Already processed model for quantization, skipping preprocessing")
-                model = ONNXModel(LocalFile({"path": preprocessed_temp_model_path}))
+                model = ONNXModelHandler(LocalFile({"path": preprocessed_temp_model_path}))
+
+        # whether to prepare qnn config
+        prepare_qnn_config = run_config.get("if_prepare_qnn_config", False)
+        if prepare_qnn_config and version.parse(OrtVersion) < version.parse("1.17.0"):
+            raise OlivePassError("if_prepare_qnn_config is only supported for onnxruntime-qnn>=1.17.0")
 
         # keys not needed for quantization
-        to_delete = ["quant_mode", "script_dir", "user_script", "quant_preprocess", "data_config"]
+        to_delete = [
+            "quant_mode",
+            "script_dir",
+            "user_script",
+            "quant_preprocess",
+            "data_config",
+            "if_prepare_qnn_config",
+        ]
         to_delete += list(get_external_data_config().keys())
 
         # update string values to enum values
@@ -373,6 +394,7 @@ class OnnxQuantization(Pass):
                     "extra_options": extra_options,
                 }
             )
+
         # remove keys not needed for quantization
         for key in to_delete:
             if key in run_config:
@@ -401,10 +423,34 @@ class OnnxQuantization(Pass):
                     config["dataloader_func"],
                     data_dir,
                     config["batch_size"],
+                    **(config["dataloader_func_kwargs"] or {}),
                 )
             elif config["data_config"]:
                 data_config = validate_config(config["data_config"], DataConfig)
                 dataloader = data_config.to_data_container().create_calibration_dataloader(data_root)
+
+            if prepare_qnn_config:
+                import inspect
+
+                from onnxruntime.quantization.execution_providers.qnn import get_qnn_qdq_config
+
+                qnn_config = get_qnn_qdq_config(
+                    model_input=model.model_path,
+                    calibration_data_reader=dataloader,
+                    calibrate_method=run_config["calibrate_method"],
+                    activation_type=run_config["activation_type"],
+                    weight_type=run_config["weight_type"],
+                    per_channel=run_config["per_channel"],
+                )
+                # override the run_config with qnn_config
+                # get all attributes of qnn_config
+                run_config = {k: v for k, v in inspect.getmembers(qnn_config) if not k.startswith("_")}
+                # remove the calibration_data_reader from run_config
+                run_config.pop("calibration_data_reader", None)
+
+            for key in ("calibration_data_reader", "use_external_data_format"):
+                if key in run_config:
+                    del run_config[key]
             try:
                 quantize_static(
                     model_input=model.model_path,
@@ -436,7 +482,7 @@ class OnnxQuantization(Pass):
         # save the model to the output path and return the model
         return model_proto_to_olive_model(onnx_model, output_model_path, config)
 
-    def _quant_preprocess(self, model: ONNXModel, output_model_path: Union[str, Path]) -> ONNXModel:
+    def _quant_preprocess(self, model: ONNXModelHandler, output_model_path: Union[str, Path]) -> ONNXModelHandler:
         from onnxruntime.quantization.preprocess import quant_pre_process
 
         try:
@@ -445,6 +491,7 @@ class OnnxQuantization(Pass):
                 output_model_path=str(output_model_path),
                 auto_merge=True,
                 save_as_external_data=True,
+                verbose=3,  # set verbose to 3 to get more information about the preprocessing
             )
         except Exception as e:
             # TODO(jambayk): try with `skip_optimization = True`
@@ -464,7 +511,7 @@ class OnnxQuantization(Pass):
             )
 
         # since this is only used internally, we will just treat it as a model file
-        return ONNXModel(LocalFile({"path": output_model_path}))
+        return ONNXModelHandler(LocalFile({"path": output_model_path}))
 
 
 class OnnxDynamicQuantization(OnnxQuantization):
@@ -474,6 +521,8 @@ class OnnxDynamicQuantization(OnnxQuantization):
 
     @staticmethod
     def _default_config(accelerator_spec: AcceleratorSpec) -> Dict[str, PassConfigParam]:
+        if accelerator_spec.execution_provider == "QNNExecutionProvider":
+            raise ValueError("QNNExecutionProvider is not supported for dynamic quantization.")
         config = {
             "quant_mode": PassConfigParam(type_=str, default_value="dynamic", description="dynamic quantization mode")
         }
@@ -505,4 +554,63 @@ class OnnxStaticQuantization(OnnxQuantization):
         config.update(deepcopy(_extra_options_config))
         # external data config
         config.update(get_external_data_config())
+        if accelerator_spec.execution_provider == "QNNExecutionProvider":
+            config["quant_format"].searchable_values = Categorical(["QDQ"])
+            # Recently Int16/Uint16 is added into onnx runtime quantization only in QDQ mode.
+            # for QNN EP integration, we give this workaround to support Int16/Uint16 in QDQ mode.
+            # TODO(jiapli): remove this workaround once figure out the Int16/UInt16 in latest quantization
+            config["activation_type"].searchable_values = Categorical(["QInt8", "QUInt8", "QUint16", "QInt16"])
+            config["weight_type"].searchable_values = Categorical(["QInt8", "QUInt8", "QUint16", "QInt16"])
+            config["if_prepare_qnn_config"] = PassConfigParam(
+                type_=bool,
+                default_value=True,
+                description="Whether to use QNN preprocess for static quantization.",
+            )
         return config
+
+
+class OnnxMatMul4Quantizer(Pass):
+    @staticmethod
+    def _default_config(accelerator_spec: AcceleratorSpec) -> Dict[str, PassConfigParam]:
+        config = {
+            "block_size": PassConfigParam(
+                type_=int,
+                default_value=32,
+                description="Block size for quantization. Default value is 32.",
+            ),
+            "is_symmetric": PassConfigParam(
+                type_=bool,
+                default_value=True,
+                description="Symmetric quantization. Default value is True.",
+            ),
+            "nodes_to_exclude": PassConfigParam(
+                type_=list,
+                default_value=None,
+                description="List of node names to exclude from quantization.",
+            ),
+        }
+        config.update(get_external_data_config())
+        return config
+
+    def _run_for_config(
+        self, model: ONNXModelHandler, data_root: str, config: Dict[str, Any], output_model_path: str
+    ) -> ONNXModelHandler:
+        from onnxruntime import __version__ as OrtVersion
+
+        if version.parse(OrtVersion) < version.parse("1.16.2"):
+            raise OlivePassError("MatMul4BitsQuantizer is only supported in onnxruntime >= 1.16.2")
+
+        from onnxruntime.quantization.matmul_4bits_quantizer import MatMul4BitsQuantizer
+
+        output_model_path = resolve_onnx_path(output_model_path, Path(model.model_path).name)
+
+        quant = MatMul4BitsQuantizer(
+            model.load_model(), config["block_size"], config["is_symmetric"], config["nodes_to_exclude"]
+        )
+        quant.process()
+        # topologically sort the graph at the end since previous optimizations may have broken it
+        quant.model.topological_sort()
+        # quant.model._check_init is not needed since it's only meant for float8 quantization
+
+        # save the model to the output path and return the model
+        return model_proto_to_olive_model(quant.model.model, output_model_path, config)

@@ -7,19 +7,20 @@ import logging
 from enum import Enum
 from typing import ClassVar, Dict, List, Optional, Union
 
-from pydantic import validator
-
 from olive.common.config_utils import ConfigBase, ConfigDictBase, validate_config
+from olive.common.pydantic_v1 import validator
 from olive.data.config import DataConfig
 from olive.evaluator.accuracy import AccuracyBase
-from olive.evaluator.metric_config import LatencyMetricConfig, MetricGoal, get_user_config_class
+from olive.evaluator.metric_config import LatencyMetricConfig, MetricGoal, ThroughputMetricConfig, get_user_config_class
 
 logger = logging.getLogger(__name__)
 
 
 class MetricType(str, Enum):
+    # TODO(trajep): support throughput
     ACCURACY = "accuracy"
     LATENCY = "latency"
+    THROUGHPUT = "throughput"
     CUSTOM = "custom"
 
 
@@ -33,6 +34,20 @@ class AccuracySubType(str, Enum):
 
 
 class LatencySubType(str, Enum):
+    # unit: millisecond
+    AVG = "avg"
+    MAX = "max"
+    MIN = "min"
+    P50 = "p50"
+    P75 = "p75"
+    P90 = "p90"
+    P95 = "p95"
+    P99 = "p99"
+    P999 = "p999"
+
+
+class ThroughputSubType(str, Enum):
+    # unit: token per second, tps
     AVG = "avg"
     MAX = "max"
     MIN = "min"
@@ -80,11 +95,19 @@ class SubMetric(ConfigBase):
 
 class Metric(ConfigBase):
     name: str
-    type: MetricType  # noqa: A003
+    type: MetricType
     backend: Optional[str] = "torch_metrics"
     sub_types: List[SubMetric]
     user_config: ConfigBase = None
     data_config: Optional[DataConfig] = None
+
+    def get_inference_settings(self, framework):
+        if self.user_config is None:
+            return None
+        if self.user_config.inference_settings:
+            return self.user_config.inference_settings.get(framework)
+        else:
+            return None
 
     def get_sub_type_info(self, info_name, no_priority_filter=True, callback=lambda x: x):
         sub_type_info = {}
@@ -113,25 +136,35 @@ class Metric(ConfigBase):
             if v.get("priority", -1) != -1 and v.get("higher_is_better", None) is None:
                 raise ValueError(f"higher_is_better must be specified for ranked custom metric: {v['name']}")
             return v
-        # name
-        sub_type_enum = AccuracySubType if values["type"] == MetricType.ACCURACY else LatencySubType
-        try:
-            # backend joint checking
-            if values["backend"] == "huggingface_metrics":
-                import evaluate
 
-                full_sub_type = evaluate.list_evaluation_modules()
-                assert v["name"] in full_sub_type, f"{v['name']} is not in https://huggingface.co/metrics"
-            elif values["backend"] == "torch_metrics":
-                v["name"] = sub_type_enum(v["name"])
-        except ValueError:
-            raise ValueError(
-                f"sub_type {v['name']} is not in {list(sub_type_enum.__members__.keys())} for {values['type']} metric"
-            ) from None
+        # backend joint checking
+        if values["backend"] == "huggingface_metrics":
+            import evaluate
+
+            try:
+                evaluate.load(v["name"])
+            except FileNotFoundError as e:
+                raise ValueError(f"could not load metric {v['name']} from huggingface/evaluate") from e
+        elif values["backend"] == "torch_metrics":
+            try:
+                sub_metric_type_cls = None
+                if values["type"] == MetricType.ACCURACY:
+                    sub_metric_type_cls = AccuracySubType
+                elif values["type"] == MetricType.LATENCY:
+                    sub_metric_type_cls = LatencySubType
+                elif values["type"] == MetricType.THROUGHPUT:
+                    sub_metric_type_cls = ThroughputSubType
+                # if not exist, will raise ValueError
+                v["name"] = sub_metric_type_cls(v["name"])
+            except ValueError:
+                raise ValueError(
+                    f"sub_type {v['name']} is not in {list(sub_metric_type_cls.__members__.keys())}"
+                    f" for {values['type']} metric"
+                ) from None
 
         # metric_config
         metric_config_cls = None
-        if sub_type_enum is AccuracySubType:
+        if values["type"] == MetricType.ACCURACY:
             v["higher_is_better"] = v.get("higher_is_better", True)
             if values["backend"] == "torch_metrics":
                 metric_config_cls = AccuracyBase.registry[v["name"]].get_config_class()
@@ -139,9 +172,12 @@ class Metric(ConfigBase):
                 from olive.evaluator.metric_backend import HuggingfaceMetrics
 
                 metric_config_cls = HuggingfaceMetrics.get_config_class()
-        elif sub_type_enum is LatencySubType:
+        elif values["type"] == MetricType.LATENCY:
             v["higher_is_better"] = v.get("higher_is_better", False)
             metric_config_cls = LatencyMetricConfig
+        elif values["type"] == MetricType.THROUGHPUT:
+            v["higher_is_better"] = v.get("higher_is_better", True)
+            metric_config_cls = ThroughputMetricConfig
         v["metric_config"] = validate_config(v.get("metric_config", {}), ConfigBase, metric_config_cls)
 
         return v

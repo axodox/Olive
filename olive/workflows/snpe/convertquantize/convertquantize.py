@@ -7,10 +7,11 @@ import logging
 from pathlib import Path
 from typing import Dict, Optional, Union
 
-from olive.model import ONNXModel, TensorFlowModel
+from olive.model import ONNXModelHandler, TensorFlowModelHandler
 from olive.passes import SNPEConversion, SNPEQuantization, SNPEtoONNXConversion
 from olive.passes.olive_pass import create_pass_from_dict
-from olive.snpe import SNPEDevice, SNPEProcessedDataLoader
+from olive.platform_sdk.qualcomm.constants import SNPEDevice
+from olive.platform_sdk.qualcomm.utils.data_loader import FileListProcessedDataLoader
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ def convertquantize(
         input_list_file (str, optional): Name of input list file. Optional if it is 'input_list.txt'.
         output_dir (str, optional): Path to the output directory. Optional if it is the same as model directory.
         output_name (str, optional): Name of the output model (without extension). Optional if same as model name.
+
     """
     models_dir = Path(model).resolve().parent if output_dir is None else Path(output_dir).resolve()
     data_dir = Path(data).resolve()
@@ -44,10 +46,10 @@ def convertquantize(
     model_file = Path(model).resolve()
     if model_file.suffix == ".onnx":
         logger.info("Loading model...")
-        model = ONNXModel(model_file)
+        model = ONNXModelHandler(model_file)
     elif model_file.suffix == ".pb":
         logger.info("Loading model...")
-        model = TensorFlowModel(model_file)
+        model = TensorFlowModelHandler(model_file)
     else:
         raise ValueError(f"Unsupported model format: {model_file.suffix}")
 
@@ -70,7 +72,7 @@ def convertquantize(
     snpe_quantized_model_file = str(models_dir / f"{name}.quant.dlc")
 
     def dataloader_func(data_dir):
-        return SNPEProcessedDataLoader(data_dir, input_list_file=input_list_file)
+        return FileListProcessedDataLoader(data_dir, input_list_file=input_list_file)
 
     snpe_quantization = create_pass_from_dict(
         SNPEQuantization,

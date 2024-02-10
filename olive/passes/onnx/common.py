@@ -8,7 +8,7 @@ from typing import Optional, Union
 
 import onnx
 
-from olive.model import ONNXModel
+from olive.model import ONNXModelHandler
 from olive.passes.pass_config import PassConfigParam
 from olive.resource_path import LocalFile, LocalFolder
 
@@ -41,6 +41,23 @@ def get_external_data_config():
                 " the external data file will be named with <model_path_name>.data"
             ),
         ),
+        "size_threshold": PassConfigParam(
+            type_=int,
+            default_value=1024,
+            description=(
+                "Effective only if save_as_external_data is True. Threshold for size of data. Only when tensor's data"
+                " is >= the size_threshold it will be converted to external data. To convert every tensor with raw data"
+                " to external data set size_threshold=0."
+            ),
+        ),
+        "convert_attribute": PassConfigParam(
+            type_=bool,
+            default_value=False,
+            description=(
+                "Effective only if save_as_external_data is True. If true, convert all tensors to external data If"
+                " false, convert only non-attribute tensors to external data"
+            ),
+        ),
     }
 
 
@@ -50,6 +67,8 @@ def model_proto_to_file(
     save_as_external_data: Optional[bool] = False,
     all_tensors_to_one_file: Optional[bool] = True,
     external_data_name: Optional[Union[str, Path]] = None,
+    size_threshold: Optional[int] = 1024,
+    convert_attribute: Optional[bool] = False,
 ) -> bool:
     """Save the ONNX model to the specified path.
 
@@ -114,6 +133,8 @@ def model_proto_to_file(
         save_as_external_data=True,
         all_tensors_to_one_file=all_tensors_to_one_file,
         location=location,
+        size_threshold=size_threshold,
+        convert_attribute=convert_attribute,
     )
     return True
 
@@ -123,8 +144,8 @@ def model_proto_to_olive_model(
     output_model_path: Union[str, Path],
     external_data_config: dict,
     check_model: bool = False,
-) -> ONNXModel:
-    """Save the ONNX model to the specified path and return the ONNXModel.
+) -> ONNXModelHandler:
+    """Save the ONNX model to the specified path and return the ONNXModelHandler.
 
     :param model_proto: The ONNX model to save.
     :param output_model_path: The path to save the ONNX model to.
@@ -133,14 +154,17 @@ def model_proto_to_olive_model(
     :param name: The name of the model.
     :check_model: If True, run onnx.checker.check_model on the model before returning.
 
-    :return: The ONNXModel.
+    :return: The ONNXModelHandler.
     """
+    config_keys = [
+        "save_as_external_data",
+        "all_tensors_to_one_file",
+        "external_data_name",
+        "size_threshold",
+        "convert_attribute",
+    ]
     has_external_data = model_proto_to_file(
-        model_proto,
-        output_model_path,
-        save_as_external_data=external_data_config["save_as_external_data"],
-        all_tensors_to_one_file=external_data_config["all_tensors_to_one_file"],
-        external_data_name=external_data_config["external_data_name"],
+        model_proto, output_model_path, **{k: external_data_config[k] for k in config_keys if k in external_data_config}
     )
     if has_external_data:
         model_path = LocalFolder({"path": Path(output_model_path).parent})
@@ -150,7 +174,7 @@ def model_proto_to_olive_model(
         model_path = LocalFile({"path": output_model_path})
         onnx_file_name = None
 
-    olive_model = ONNXModel(model_path=model_path, onnx_file_name=onnx_file_name)
+    olive_model = ONNXModelHandler(model_path=model_path, onnx_file_name=onnx_file_name)
 
     if check_model:
         onnx.checker.check_model(olive_model.model_path)

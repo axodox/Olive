@@ -30,6 +30,24 @@ olive_run("my_model_acceleration_description.json")
 `olive.workflows.run` in python code also accepts python dictionary equivalent of the config JSON object.
 
 You can use setup mode `python -m olive.workflows.run --config my_model_acceleration_description.json --setup` to identify list of additional packages you may need to install for your workflow.
+
+You can also change the default directory for temporary files and directories using `--tempdir` option.
+Set this to a local directory if you want to avoid using the default tempdir for reasons such as disk space and permissions.
+
+If you want to use different device ids specially for cuda device, please set `CUDA_VISIBLE_DEVICES` to the desired device ids, like:
+
+    # linux
+    CUDA_VISIBLE_DEVICES=2,3 python -m olive.workflows.run --config my_model_acceleration_description.json
+
+    # windows
+    set CUDA_VISIBLE_DEVICES=2,3 & python -m olive.workflows.run --config my_model_acceleration_description.json
+
+    # python
+    import os
+    from olive.workflows import run as olive_run
+    os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
+    olive_run("my_model_acceleration_description.json")
+
 ```
 
 ## Information needed to accelerate a model
@@ -37,6 +55,8 @@ You can use setup mode `python -m olive.workflows.run --config my_model_accelera
 Typically, you need to have input model information such as model type, input names and shapes, where the model is stored. You would also know your desired performance requirements in terms of Latency, Accuracy etc. Along with this information you need to provide Olive list of model transformations and optimizations you want to apply. Optionally you can also select target hardware and select additional Olive features. Now, let's take a look at how you can include this information in the json configuration file you will use as an Olive input.
 
 ### Input Model
+
+Olive can accept ONNX, Torch, OpenVINO and SNPE models as of now. The config for each of these models is slightly different. You can find more information about each of these models in [Input Model configuration](https://microsoft.github.io/Olive/api/models.html).
 
 Let's use a PyTorch resnet model as an example which you can describe in the json file as follows. You can use any PyTorch model.
 
@@ -55,26 +75,6 @@ Let's use a PyTorch resnet model as an example which you can describe in the jso
 ```
 
 It is possible to provide additional information such as dataset you want to use. You could also directly select HuggingFace model and task. See [Input Model configuration](../overview/options.md/#input-model-information) for more information.
-
-### Performance Requirement
-
-Let's assume you want to optimize for latency and provide the following information to the Olive evaluator, which is responsible to measure the performance metric.
-
-```json
-    "evaluators": {
-        "my_evaluator":{
-            "metrics":[
-                {
-                    "name": "my_latency_metric",
-                    "type": "latency",
-                    "sub_types": [{"name": "avg"}]
-                }
-            ]
-        }
-    },
-```
-
-You can also specify accuracy requirements. See [Evaluator](../overview/options.md/#evaluators-information) for more information.
 
 ### Passes to apply
 
@@ -102,8 +102,7 @@ Finally, you can select Olive features such as which performance metrics you wan
 
 ```json
     "engine": {
-        "log_severity_level": 0,
-        "evaluator": "my_evaluator"
+        "log_severity_level": 0
     }
 ```
 
@@ -125,17 +124,6 @@ Now you have a complete json file that you can use to accelerate the resnet mode
             }
         }
     },
-    "evaluators": {
-        "my_evaluator":{
-            "metrics":[
-                {
-                    "name": "my_latency_metric",
-                    "type": "latency",
-                    "sub_types": [{"name": "avg"}]
-                }
-            ]
-        }
-    },
     "passes": {
         "onnx_conversion": {
             "type": "OnnxConversion",
@@ -148,8 +136,7 @@ Now you have a complete json file that you can use to accelerate the resnet mode
         },
     },
     "engine": {
-        "log_severity_level": 0,
-        "evaluator": "common_evaluator"
+        "log_severity_level": 0
     }
 }
 ```

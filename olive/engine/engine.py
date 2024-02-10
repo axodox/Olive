@@ -9,30 +9,30 @@ from collections import OrderedDict, defaultdict
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Type, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, Union
 
 import olive.cache as cache_utils
 from olive.common.config_utils import ConfigBase, validate_config
 from olive.common.utils import hash_dict
 from olive.engine.config import FAILED_CONFIG, INVALID_CONFIG, PRUNED_CONFIGS, EngineConfig
-from olive.engine.footprint import Footprint, FootprintNode, FootprintNodeMetric
-from olive.engine.packaging.packaging_config import PackagingConfig
+from olive.engine.footprint import Footprint, FootprintNodeMetric
 from olive.engine.packaging.packaging_generator import generate_output_artifacts
 from olive.evaluator.metric import Metric, MetricResult, joint_metric_key
-from olive.evaluator.olive_evaluator import OliveEvaluatorConfig
-from olive.exception import OlivePassError
-from olive.hardware import AcceleratorLookup, AcceleratorSpec, Device
+from olive.exception import EXCEPTIONS_TO_RAISE, OlivePassError
 from olive.model import ModelConfig
-from olive.passes.olive_pass import Pass
 from olive.strategy.search_strategy import SearchStrategy
 from olive.systems.common import SystemType
 from olive.systems.local import LocalSystem
 from olive.systems.olive_system import OliveSystem
 from olive.systems.utils import create_new_system_with_cache
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from olive.engine.packaging.packaging_config import PackagingConfig
+    from olive.evaluator.olive_evaluator import OliveEvaluatorConfig
+    from olive.hardware import AcceleratorSpec
+    from olive.passes.olive_pass import Pass
 
-EXCEPTIONS_TO_RAISE = (AssertionError, AttributeError, ImportError, TypeError, ValueError)
+logger = logging.getLogger(__name__)
 
 
 class Engine:
@@ -47,8 +47,7 @@ class Engine:
         search_strategy: Optional[SearchStrategy] = None,
         host: Optional[OliveSystem] = None,
         target: Optional[OliveSystem] = None,
-        evaluator_config: Optional[OliveEvaluatorConfig] = None,
-        execution_providers: Optional[List[str]] = None,
+        evaluator_config: Optional["OliveEvaluatorConfig"] = None,
     ):
         self._config = validate_config(config, EngineConfig)
 
@@ -82,8 +81,6 @@ class Engine:
         else:
             self.target = LocalSystem()
 
-        self.setup_accelerators(execution_providers)
-
         # default evaluator
         self.evaluator_config = None
         if evaluator_config is not None:
@@ -96,96 +93,12 @@ class Engine:
 
         # {"pass_name": {"pass": pass, "host": host, "evaluator": evaluator, "clean_run_cache": clean_run_cache}}
         self.passes = OrderedDict()
-
         self.pass_flows = None
         self.pass_flows_search_spaces = None
 
         self.footprints = defaultdict(Footprint)
-
         self.azureml_client_config = self._config.azureml_client_config
-
         self._initialized = False
-
-    def setup_accelerators(self, execution_providers):
-        if execution_providers is None:
-            execution_providers = self._config.execution_providers
-
-        if not execution_providers:
-            if self.target.olive_managed_env:
-                raise ValueError("Managed environment requires execution providers to be specified.")
-            elif self.target.system_type == SystemType.AzureML:
-                # verify the AzureML system have specified the execution providers
-                # Please note we could not use isinstance(target, AzureMLSystem) since it would import AzureML packages.
-                raise ValueError("AzureMLSystem requires execution providers to be specified.")
-            elif self.target.system_type in (SystemType.Local, SystemType.PythonEnvironment):
-                execution_providers = self.target.get_supported_execution_providers()
-            elif self.target.system_type == SystemType.Docker:
-                # for docker system we default use CPUExecutionProvider
-                execution_providers = ["CPUExecutionProvider"]
-        logger.debug(f"Initial execution providers: {execution_providers}")
-
-        self.execution_providers = execution_providers
-
-        accelerators: List[str] = self.target.accelerators
-        if accelerators is None:
-            inferred_accelerators = AcceleratorLookup.infer_accelerators_from_execution_provider(
-                self.execution_providers
-            )
-            if not inferred_accelerators:
-                logger.warning("Cannot infer the accelerators from the target system. Use CPU as default.")
-                accelerators = ["CPU"]
-            else:
-                logger.debug(
-                    f"Use inferred accelerators {inferred_accelerators} "
-                    f"from given execution providers {self.execution_providers}."
-                )
-                accelerators = inferred_accelerators
-        logger.debug(f"Initial accelerators: {accelerators}")
-
-        ep_to_process = set(self.execution_providers)
-        # Flatten the accelerators to list of AcceleratorSpec
-        self.accelerator_specs: List[AcceleratorSpec] = []
-        is_cpu_available = "cpu" in [accelerator.lower() for accelerator in accelerators]
-        for accelerator in accelerators:
-            device = Device(accelerator.lower())
-            if self.target.olive_managed_env:
-                available_eps = AcceleratorLookup.get_managed_supported_execution_providers(device)
-            elif self.target.system_type in (SystemType.Local, SystemType.PythonEnvironment):
-                available_eps = self.target.get_supported_execution_providers()
-            elif self.target.system_type == SystemType.Docker:
-                # TODO(myguo): do we need allow docker system support other execution providers?
-                available_eps = ["CPUExecutionProvider"]
-            else:
-                available_eps = self.execution_providers
-
-            supported_eps = AcceleratorLookup.get_execution_providers_for_device_by_available_providers(
-                device, available_eps
-            )
-            logger.debug(f"Supported execution providers for device {device}: {supported_eps}")
-            for ep in ep_to_process.copy():
-                if ep == "CPUExecutionProvider" and device != "cpu" and is_cpu_available:
-                    logger.info(
-                        "Ignore the CPUExecutionProvider for non-cpu device since cpu accelerator is also present."
-                    )
-                elif ep in supported_eps:
-                    self.accelerator_specs.append(AcceleratorSpec(device, ep))
-                    ep_to_process.remove(ep)
-
-        assert self.accelerator_specs, (
-            "No valid accelerator specified for target system. "
-            "Please specify the accelerators in the target system or provide valid execution providers. "
-            f"Given execution providers: {self.execution_providers}. "
-            f"Current accelerators: {accelerators}."
-            f"Supported execution providers: {AcceleratorLookup.EXECUTION_PROVIDERS}."
-        )
-        logger.info(
-            f"Running workflow on accelerator specs: {','.join([str(spec) for spec in self.accelerator_specs])}"
-        )
-        if ep_to_process:
-            logger.warning(
-                f"The following execution provider is not supported: {','.join(ep_to_process)}. "
-                "Please consider installing an onnxruntime build that contains the relevant execution providers. "
-            )
 
     def initialize(self):
         """Initialize engine state. This should be done before running the registered passes."""
@@ -226,12 +139,12 @@ class Engine:
 
     def register(
         self,
-        pass_type: Type[Pass],
+        pass_type: Type["Pass"],
         config: Dict[str, Any] = None,
         disable_search=False,
         name: str = None,
         host: OliveSystem = None,
-        evaluator_config: OliveEvaluatorConfig = None,
+        evaluator_config: "OliveEvaluatorConfig" = None,
         clean_run_cache: bool = False,
         output_name: str = None,
     ):
@@ -260,10 +173,10 @@ class Engine:
 
     def register_pass(
         self,
-        p: Pass,
+        p: "Pass",
         name: str = None,
         host: OliveSystem = None,
-        evaluator_config: OliveEvaluatorConfig = None,
+        evaluator_config: "OliveEvaluatorConfig" = None,
         output_name: str = None,
     ):
         """Register a pass instance."""
@@ -298,6 +211,7 @@ class Engine:
 
         Args:
             pass_flows: a list of pass names, each pass name is a string.
+
         """
         if not pass_flows:
             self.pass_flows = [list(self.pass_config.keys())] if self.pass_config else []
@@ -307,8 +221,9 @@ class Engine:
     def run(
         self,
         input_model_config: ModelConfig,
+        accelerator_specs: List["AcceleratorSpec"],
         data_root: str = None,
-        packaging_config: Optional[PackagingConfig] = None,
+        packaging_config: Optional["PackagingConfig"] = None,
         output_dir: str = None,
         output_name: str = None,
         evaluate_input_model: bool = True,
@@ -317,6 +232,7 @@ class Engine:
 
         Args:
             input_model_config: input Olive model configuration
+            accelerator_specs: list of accelerator specs
             data_root: data root for the input data
             packaging_config: packaging configuration, if packaging_config is provided, the output
                 model will be packaged into a zip file.
@@ -335,7 +251,11 @@ class Engine:
 
             if search strategy is not None, run the search strategy to find candidate models.
             Return footprint/zip(packaging_config) of candidate models and evaluation results.
+
         """
+        if not accelerator_specs:
+            raise ValueError("No accelerator specified")
+
         if not self._initialized:
             self.initialize()
 
@@ -344,10 +264,15 @@ class Engine:
 
         outputs = {}
 
-        for accelerator_spec in self.accelerator_specs:
+        for accelerator_spec in accelerator_specs:
             with self.create_managed_environment(accelerator_spec):
                 run_result = self.run_accelerator(
-                    input_model_config, data_root, output_dir, output_name, evaluate_input_model, accelerator_spec
+                    input_model_config,
+                    data_root,
+                    output_dir,
+                    output_name,
+                    evaluate_input_model,
+                    accelerator_spec,
                 )
 
                 if run_result is None:
@@ -361,8 +286,7 @@ class Engine:
             self.dump_run_history(run_history, output_dir / f"run_history_{accelerator_spec}.txt")
 
         if packaging_config and self.passes:
-            # TODO(trajep): should we support package input model?
-            # TODO(trajep): do you support packaging pytorch models?
+            # TODO(trajep): should we support packaging pytorch model?
             logger.info(f"Package top ranked {sum(len(f.nodes) for f in outputs.values())} models as artifacts")
             generate_output_artifacts(
                 packaging_config,
@@ -382,21 +306,22 @@ class Engine:
         output_dir: Path,
         output_name: str,
         evaluate_input_model: bool,
-        accelerator_spec: AcceleratorSpec,
+        accelerator_spec: "AcceleratorSpec",
     ):
         # generate search space and initialize the passes for each hardware accelerator
         self.setup_passes(accelerator_spec)
-
         # hash the input model
         input_model_id = self._init_input_model(input_model_config)
         self.footprints[accelerator_spec].record(model_id=input_model_id)
+        prefix_output_name = Engine._get_prefix_output_name(output_name, accelerator_spec)
 
         try:
-            if evaluate_input_model:
-                prefix_output_name = (
-                    f"{output_name}_{accelerator_spec}_" if output_name is not None else f"{accelerator_spec}"
+            if evaluate_input_model and not self.evaluator_config:
+                logger.debug(
+                    "evaluate_input_model is True but no evaluator provided in no-search mode. Skipping input model"
+                    " evaluation."
                 )
-                assert self.evaluator_config is not None, "evaluate_input_model is True but no evaluator provided"
+            elif evaluate_input_model:
                 results = self._evaluate_model(
                     input_model_config, input_model_id, data_root, self.evaluator_config, accelerator_spec
                 )
@@ -411,7 +336,7 @@ class Engine:
                     return results
 
             if self.no_search:
-                return self.run_no_search(
+                output_footprint = self.run_no_search(
                     input_model_config,
                     input_model_id,
                     data_root,
@@ -420,7 +345,7 @@ class Engine:
                     output_name,
                 )
             else:
-                return self.run_search(
+                output_footprint = self.run_search(
                     input_model_config,
                     input_model_id,
                     data_root,
@@ -434,11 +359,16 @@ class Engine:
             logger.warning(f"Failed to run Olive on {accelerator_spec}: {e}", exc_info=True)
             return None
 
-    def setup_passes(self, accelerator_spec: AcceleratorSpec):
+        output_fp_path = output_dir / f"{prefix_output_name}_footprints.json"
+        logger.info(f"Save footprint to {output_fp_path}")
+        self.footprints[accelerator_spec].to_file(output_fp_path)
+        return output_footprint
+
+    def setup_passes(self, accelerator_spec: "AcceleratorSpec"):
         # clean the passes
         self.passes.clear()
         for name, config in self.pass_config.items():
-            pass_cls: Type[Pass] = config["type"]
+            pass_cls: Type["Pass"] = config["type"]
             pass_cfg = config["config"]
             pass_cfg = pass_cls.generate_search_space(accelerator_spec, pass_cfg, config["disable_search"])
             p = pass_cls(accelerator_spec, pass_cfg, config["disable_search"])
@@ -454,18 +384,24 @@ class Engine:
         # These passes will be added to the search space
         self.pass_flows_search_spaces = []
         for pass_flow in self.pass_flows:
-            self.pass_search_spaces = []  # pylint: disable=attribute-defined-outside-init
+            pass_search_spaces = []
             for pass_name in pass_flow:
-                p: Pass = self.passes[pass_name]["pass"]
-                self.pass_search_spaces.append((pass_name, p.search_space()))
-            self.pass_flows_search_spaces.append(self.pass_search_spaces)
+                p: "Pass" = self.passes[pass_name]["pass"]
+                pass_search_spaces.append((pass_name, p.search_space()))
+            self.pass_flows_search_spaces.append(pass_search_spaces)
+
+    def reset_passes(self):
+        """Cleanup the passes."""
+        self.passes.clear()
+        self.pass_config.clear()
+        self.pass_flows = []
 
     def run_no_search(
         self,
         input_model_config: ModelConfig,
         input_model_id: str,
         data_root: str,
-        accelerator_spec: AcceleratorSpec,
+        accelerator_spec: "AcceleratorSpec",
         output_dir: str = None,
         output_name: str = None,
     ):
@@ -498,15 +434,10 @@ class Engine:
             # output dir with pass flow
             output_dir_with_pf = Path(output_dir) / "-".join(pass_flow)
 
+            if not pass_output_names[-1] or output_name:
+                # if the last pass does not have output name, use the prefix output name
+                pass_output_names[-1] = Engine._get_prefix_output_name(output_name, accelerator_spec)
             final_output_name = pass_output_names[-1]
-            if output_name:
-                # override the output name of the last pass
-                logger.debug("Engine output_name is provided. Will ignore output_name for final pass")
-                final_output_name = f"{output_name}_{accelerator_spec}"
-            elif not final_output_name:
-                # use the default output name
-                final_output_name = f"{accelerator_spec}"
-            pass_output_names[-1] = final_output_name
 
             output_model_json = None
             for pass_output_name, pass_output_model_id in zip(pass_output_names, model_ids):
@@ -540,12 +471,12 @@ class Engine:
         input_model_config: ModelConfig,
         input_model_id: str,
         data_root: str,
-        accelerator_spec: AcceleratorSpec,
+        accelerator_spec: "AcceleratorSpec",
         output_dir: str = None,
         output_name: str = None,
     ):
         """Run all the registered Olive passes in search model where search strategy is not None."""
-        prefix_output_name = f"{output_name}_{accelerator_spec}_" if output_name is not None else f"{accelerator_spec}_"
+        prefix_output_name = Engine._get_prefix_output_name(output_name, accelerator_spec)
 
         # get objective_dict
         evaluator_config = self.evaluator_for_pass(list(self.passes.keys())[-1])
@@ -556,6 +487,7 @@ class Engine:
             objective_dict = self.resolve_objectives(
                 input_model_config, input_model_id, data_root, evaluator_config.metrics, accelerator_spec
             )
+            self.footprints[accelerator_spec].record_objective_dict(objective_dict)
 
         # initialize the search strategy
         self.search_strategy.initialize(self.pass_flows_search_spaces, input_model_id, objective_dict)
@@ -594,28 +526,19 @@ class Engine:
             time_diff = time.time() - start_time
             self.search_strategy.check_exit_criteria(iter_num, time_diff, signal)
 
-        self.footprints[accelerator_spec].to_file(output_dir / f"{prefix_output_name}footprints.json")
-
         return self.create_pareto_frontier_footprints(
-            accelerator_spec, output_model_num, objective_dict, output_dir, prefix_output_name
+            accelerator_spec, output_model_num, output_dir, prefix_output_name
         )
 
-    def create_pareto_frontier_footprints(
-        self, accelerator_spec, output_model_num, objective_dict, output_dir, prefix_output_name
-    ):
-        pf_footprints = self.footprints[accelerator_spec].create_pareto_frontier()
-        if output_model_num is None or len(pf_footprints.nodes) <= output_model_num:
-            logger.info(f"Output all {len(pf_footprints.nodes)} models")
-        else:
-            top_ranked_nodes = self._get_top_ranked_nodes(objective_dict, pf_footprints, output_model_num)
-            logger.info(f"Output top ranked {len(top_ranked_nodes)} models based on metric priorities")
-            pf_footprints.update_nodes(top_ranked_nodes)
-
-        pf_footprints.to_file(output_dir / f"{prefix_output_name}pareto_frontier_footprints.json")
+    def create_pareto_frontier_footprints(self, accelerator_spec, output_model_num, output_dir, prefix_output_name):
+        pf_footprints = self.footprints[accelerator_spec].create_pareto_frontier(output_model_num)
+        if not pf_footprints:
+            return None
+        pf_footprints.to_file(output_dir / f"{prefix_output_name}_pareto_frontier_footprints.json")
 
         if self._config.plot_pareto_frontier:
             pf_footprints.plot_pareto_frontier_to_html(
-                save_path=output_dir / f"{prefix_output_name}pareto_frontier_footprints_chart.html"
+                save_path=output_dir / f"{prefix_output_name}_pareto_frontier_footprints_chart.html"
             )
 
         return pf_footprints
@@ -642,7 +565,7 @@ class Engine:
         input_model_id: str,
         data_root: str,
         metrics: List[Metric],
-        accelerator_spec: AcceleratorSpec,
+        accelerator_spec: "AcceleratorSpec",
     ) -> Dict[str, Dict[str, Any]]:
         """Return a dictionary of objectives and their higher_is_better and goal values.
 
@@ -660,7 +583,6 @@ class Engine:
                     "goal": goals.get(metric_key),
                     "priority": sub_type.priority,
                 }
-        self.footprints[accelerator_spec].record_objective_dict(objective_dict)
         return dict(sorted(objective_dict.items(), key=lambda x: x[1]["priority"]))
 
     def resolve_goals(
@@ -669,7 +591,7 @@ class Engine:
         input_model_id: str,
         data_root: str,
         metrics: List[Metric],
-        accelerator_spec: AcceleratorSpec,
+        accelerator_spec: "AcceleratorSpec",
     ) -> Dict[str, float]:
         """Resolve the goals of the given metrics into thresholds for the given model."""
         goals = {}
@@ -771,8 +693,9 @@ class Engine:
         try:
             with model_json_path.open("w") as f:
                 json.dump(model_json, f, indent=4)
-        except Exception as e:
-            logger.error(f"Failed to cache model: {e}", exc_info=True)
+            logger.debug(f"Cached model {model_id} to {model_json_path}")
+        except Exception:
+            logger.exception("Failed to cache model")
 
     def _load_model(self, model_id: str) -> Union[ModelConfig, str]:
         """Load the model from the cache directory."""
@@ -780,8 +703,8 @@ class Engine:
         try:
             with model_json_path.open() as f:
                 model_json = json.load(f)
-        except Exception as e:
-            logger.error(f"Failed to load model: {e}", exc_info=True)
+        except Exception:
+            logger.exception("Failed to load model.")
             return None
 
         if model_json == {}:
@@ -817,7 +740,7 @@ class Engine:
         pass_name: int,
         input_model_number: str,
         pass_config: dict,
-        accelerator_spec: AcceleratorSpec,
+        accelerator_spec: "AcceleratorSpec",
     ):
         """Get the path to the run json."""
         pass_config_hash = hash_dict(pass_config)
@@ -835,7 +758,7 @@ class Engine:
         pass_config: dict,
         input_model_id: str,
         output_model_id: str,
-        accelerator_spec: AcceleratorSpec,
+        accelerator_spec: "AcceleratorSpec",
         run_start_time: float = 0,
         run_end_time: float = 0,
     ):
@@ -853,10 +776,11 @@ class Engine:
         try:
             with run_json_path.open("w") as f:
                 json.dump(run_json, f, indent=4)
-        except Exception as e:
-            logger.error(f"Failed to cache run: {e}", exc_info=True)
+            logger.debug(f"Cached run for {input_model_id}->{output_model_id} into {run_json_path}")
+        except Exception:
+            logger.exception("Failed to cache run")
 
-    def _load_run(self, input_model_id: str, pass_name: int, pass_config: dict, accelerator_spec: AcceleratorSpec):
+    def _load_run(self, input_model_id: str, pass_name: int, pass_config: dict, accelerator_spec: "AcceleratorSpec"):
         """Load the run from the cache directory."""
         input_model_number = input_model_id.split("_")[0]
         run_json_path = self.get_run_json_path(pass_name, input_model_number, pass_config, accelerator_spec)
@@ -865,8 +789,8 @@ class Engine:
             try:
                 with run_json_path.open() as f:
                     run_json = json.load(f)
-            except Exception as e:
-                logger.error(f"Failed to load run: {e}", exc_info=True)
+            except Exception:
+                logger.exception("Failed to load run")
                 run_json = {}
         return run_json
 
@@ -876,7 +800,7 @@ class Engine:
         model_config: ModelConfig,
         model_id: str,
         data_root: str,
-        accelerator_spec: AcceleratorSpec,
+        accelerator_spec: "AcceleratorSpec",
     ):
         """Run all the passes in the order they were registered.
 
@@ -885,6 +809,7 @@ class Engine:
         should_prune = False
         # run all the passes in the step
         model_ids = []
+        pass_id = None
         for pass_id, pass_search_point in passes:
             model_config, model_id = self._run_pass(
                 pass_id, pass_search_point, model_config, model_id, data_root, accelerator_spec
@@ -897,7 +822,7 @@ class Engine:
 
         if not should_prune:
             # evaluate the model
-            evaluator_config = self.evaluator_for_pass(pass_id)  # pylint: disable=undefined-loop-variable
+            evaluator_config = self.evaluator_for_pass(pass_id)
             if self.no_search and evaluator_config is None:
                 # skip evaluation if no search and no evaluator
                 signal = None
@@ -917,11 +842,11 @@ class Engine:
         input_model_config: ModelConfig,
         input_model_id: str,
         data_root: str,
-        accelerator_spec: AcceleratorSpec,
+        accelerator_spec: "AcceleratorSpec",
     ):
         """Run a pass on the input model."""
         # pass
-        p: Pass = self.passes[pass_id]["pass"]
+        p: "Pass" = self.passes[pass_id]["pass"]
         pass_name = p.__class__.__name__
         logger.info(f"Running pass {pass_id}:{pass_name}")
         pass_config = p.config_at_search_point(pass_search_point)
@@ -929,7 +854,7 @@ class Engine:
 
         # check whether the config is valid
         if not p.validate_search_point(pass_search_point, accelerator_spec, with_fixed_value=True):
-            logger.debug("Invalid search point, prune")
+            logger.warning("Invalid search point, prune")
             output_model_config = INVALID_CONFIG
             # no need to record in footprint since there was no run and thus no valid/failed model
             # invalid configs are also not cached since the same config can be valid for other accelerator specs
@@ -948,15 +873,16 @@ class Engine:
                 # footprint model and run
                 self.footprints[accelerator_spec].record(
                     model_id=output_model_id,
-                    model_config=output_model_config.to_json()
-                    if output_model_config != FAILED_CONFIG
-                    else {"is_pruned": True},
+                    model_config=(
+                        output_model_config.to_json() if output_model_config != FAILED_CONFIG else {"is_pruned": True}
+                    ),
                     parent_model_id=input_model_id,
                     from_pass=pass_name,
                     pass_run_config=pass_config,
                     start_time=run_cache.get("run_start_time", 0),
                     end_time=run_cache.get("run_end_time", 0),
                 )
+                logger.info(f"Loaded model from cache: {output_model_id}")
                 return output_model_config, output_model_id
 
         # new model id
@@ -985,8 +911,8 @@ class Engine:
         run_start_time = datetime.now().timestamp()
         try:
             output_model_config = host.run_pass(p, input_model_config, data_root, output_model_path, pass_search_point)
-        except OlivePassError as e:
-            logger.error(f"Pass run_pass failed: {e}", exc_info=True)
+        except OlivePassError:
+            logger.exception("Pass run_pass failed")
             output_model_config = FAILED_CONFIG
         except EXCEPTIONS_TO_RAISE:
             # Don't catch these errors since most of time, it is caused by the user errors and need not retry.
@@ -996,11 +922,13 @@ class Engine:
             # TODO(jambayk): from the time being, we need to catch all exceptions to make the
             #      search process robust. We need rethrow the exception only when
             #      it is not pass specific. For example, for olive bugs and user errors
-            logger.error("Pass run failed.", exc_info=True)
+            logger.exception("Pass run failed.")
             if self.no_search:
                 raise  # rethrow the exception if no search is performed
 
         run_end_time = datetime.now().timestamp()
+        logger.info(f"Pass {pass_id}:{pass_name} finished in {run_end_time - run_start_time} seconds")
+
         # cache model
         self._cache_model(output_model_config, output_model_id)
 
@@ -1035,8 +963,8 @@ class Engine:
         try:
             with evaluation_json_path.open("w") as f:
                 json.dump(evaluation_json, f, indent=4)
-        except Exception as e:
-            logger.error(f"Failed to cache evaluation: {e}", exc_info=True)
+        except Exception:
+            logger.exception("Failed to cache evaluation")
 
     def _load_evaluation(self, model_id: str):
         """Load the evaluation from the cache directory."""
@@ -1047,8 +975,8 @@ class Engine:
                     evaluation_json = json.load(f)
                 signal = evaluation_json["signal"]
                 signal = MetricResult(**signal)
-            except Exception as e:
-                logger.error(f"Failed to load evaluation: {e}", exc_info=True)
+            except Exception:
+                logger.exception("Failed to load evaluation")
                 signal = None
             return signal
         else:
@@ -1059,8 +987,8 @@ class Engine:
         model_config: ModelConfig,
         model_id: str,
         data_root: str,
-        evaluator_config: OliveEvaluatorConfig,
-        accelerator_spec: AcceleratorSpec,
+        evaluator_config: "OliveEvaluatorConfig",
+        accelerator_spec: "AcceleratorSpec",
     ):
         """Evaluate a model."""
         logger.debug("Evaluating model ...")
@@ -1104,21 +1032,9 @@ class Engine:
         )
         return signal
 
-    def _get_top_ranked_nodes(
-        self, objective_dict: Dict[str, Any], footprint: Footprint, k: int
-    ) -> List[FootprintNode]:
-        footprint_node_list = footprint.nodes.values()
-        sorted_footprint_node_list = sorted(
-            footprint_node_list,
-            key=lambda x: tuple(
-                x.metrics.value[metric].value
-                if x.metrics.cmp_direction[metric] == 1
-                else -x.metrics.value[metric].value
-                for metric in objective_dict
-            ),
-            reverse=True,
-        )
-        return sorted_footprint_node_list[:k]
+    @staticmethod
+    def _get_prefix_output_name(output_name: str, accelerator_spec: "AcceleratorSpec"):
+        return f"{output_name}_{accelerator_spec}" if output_name else str(accelerator_spec)
 
     @contextmanager
     def create_managed_environment(self, accelerator_spec):

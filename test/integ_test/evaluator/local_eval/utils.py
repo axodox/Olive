@@ -36,8 +36,8 @@ def post_process(res):
 
 
 def openvino_post_process(res):
-    res = next(iter(res.values()))
-    return res.argmax(1)
+    res = next(iter(res))
+    return [res.argmax()]
 
 
 def create_dataloader(data_dir, batch_size, *args, **kwargs):
@@ -94,7 +94,7 @@ def get_accuracy_metric(post_process, dataloader=create_dataloader):
         "data_dir": data_dir,
         "dataloader_func": dataloader,
     }
-    sub_types = [{"name": AccuracySubType.ACCURACY_SCORE}]
+    sub_types = [{"name": AccuracySubType.ACCURACY_SCORE, "metric_config": {"task": "multiclass", "num_classes": 10}}]
     return Metric(
         name="accuracy",
         type=MetricType.ACCURACY,

@@ -2,13 +2,14 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 # --------------------------------------------------------------------------
+import logging
 from pathlib import Path
 from typing import Dict, List, Union
 
-from pydantic import validator
-
+from olive.auto_optimizer import AutoOptimizerConfig
 from olive.azureml.azureml_client import AzureMLClientConfig
 from olive.common.config_utils import ConfigBase, validate_config
+from olive.common.pydantic_v1 import validator
 from olive.data.config import DataConfig
 from olive.data.container.huggingface_container import HuggingfaceContainer
 from olive.engine import Engine, EngineConfig
@@ -16,8 +17,11 @@ from olive.engine.packaging.packaging_config import PackagingConfig
 from olive.evaluator.olive_evaluator import OliveEvaluatorConfig
 from olive.model import ModelConfig
 from olive.passes import FullPassConfig, Pass
+from olive.passes.pass_config import PassParamDefault
 from olive.resource_path import AZUREML_RESOURCE_TYPES
 from olive.systems.system_config import SystemConfig
+
+logger = logging.getLogger(__name__)
 
 
 class RunPassConfig(FullPassConfig):
@@ -34,16 +38,21 @@ class RunEngineConfig(EngineConfig):
     packaging_config: PackagingConfig = None
     log_severity_level: int = 1
     ort_log_severity_level: int = 3
+    ort_py_log_severity_level: int = 3
+    log_to_file: bool = False
 
     def create_engine(self):
         config = self.dict()
         to_del = [
             "evaluate_input_model",
+            "execution_providers",
             "output_dir",
             "output_name",
             "packaging_config",
             "log_severity_level",
             "ort_log_severity_level",
+            "ort_py_log_severity_level",
+            "log_to_file",
         ]
         for key in to_del:
             del config[key]
@@ -60,9 +69,10 @@ class RunConfig(ConfigBase):
     data_root: str = None
     data_configs: Dict[str, DataConfig] = None
     evaluators: Dict[str, OliveEvaluatorConfig] = None
+    engine: RunEngineConfig = None
     pass_flows: List[List[str]] = None
-    engine: RunEngineConfig
     passes: Dict[str, RunPassConfig] = None
+    auto_optimizer_config: AutoOptimizerConfig = None
 
     @validator("input_model", pre=True)
     def insert_aml_client(cls, v, values):
@@ -76,6 +86,12 @@ class RunConfig(ConfigBase):
 
         if _have_aml_client(input_model_path, values):
             v["config"]["model_path"]["config"]["azureml_client"] = values["azureml_client"]
+        return v
+
+    @validator("engine", pre=True, always=True)
+    def default_engine_config(cls, v):
+        if v is None:
+            v = {}
         return v
 
     @validator("data_configs", pre=True, always=True)
@@ -94,15 +110,36 @@ class RunConfig(ConfigBase):
         hf_config = values["input_model"].dict()["config"].get("hf_config", {})
         hf_config_dataset = hf_config.get("dataset", None)
         if hf_config_dataset:
+            params_config = {
+                "model_name": hf_config.get("model_name", None),
+                "task": hf_config.get("task", None),
+                **hf_config_dataset,
+            }
+            # insert trust_remote_code from from_pretrained_args if present
+            # won't override if value was set to False explicitly
+            # will keep as list of keys for future extension
+            for key in ["trust_remote_code"]:
+                if hf_config.get("from_pretrained_args", {}).get(key) and params_config.get(key) is None:
+                    params_config[key] = hf_config["from_pretrained_args"][key]
             v[INPUT_MODEL_DATA_CONFIG] = {
                 "name": INPUT_MODEL_DATA_CONFIG,
                 "type": HuggingfaceContainer.__name__,
-                "params_config": {
-                    "model_name": hf_config.get("model_name", None),
-                    "task": hf_config.get("task", None),
-                    **hf_config_dataset,
-                },
+                "params_config": params_config,
             }
+        return v
+
+    @validator("data_configs", pre=True)
+    def validate_data_config_names(cls, v):
+        if not v:
+            return v
+
+        # validate data config name is unique
+        data_name_set = set()
+        for data_config in v.values():
+            data_config_obj = validate_config(data_config, DataConfig)
+            if data_config_obj.name in data_name_set:
+                raise ValueError(f"Data config name {data_config_obj.name} is duplicated. Please use another name.")
+            data_name_set.add(data_config_obj.name)
         return v
 
     @validator("data_configs", pre=True, each_item=True)
@@ -121,9 +158,18 @@ class RunConfig(ConfigBase):
 
         if v["type"] == HuggingfaceContainer.__name__:
             # auto insert model_name and task from input model hf config if not present
+            # both are required for huggingface container
             for key in ["model_name", "task"]:
                 if not v["params_config"].get(key, None):
                     v["params_config"][key] = hf_config.get(key, None)
+            # auto insert trust_remote_code from input model hf config
+            # won't override if value was set to False explicitly
+            for key in ["trust_remote_code"]:
+                if (
+                    hf_config.get("from_pretrained_args", {}).get(key, None)
+                    and v["params_config"].get(key, None) is None
+                ):
+                    v["params_config"][key] = hf_config["from_pretrained_args"][key]
 
         return validate_config(v, DataConfig)
 
@@ -148,7 +194,8 @@ class RunConfig(ConfigBase):
     @validator("engine")
     def validate_evaluate_input_model(cls, v):
         if v.evaluate_input_model and v.evaluator is None:
-            raise ValueError("Evaluation only requires evaluator")
+            logger.info("No evaluator is specified, skip to evaluate model")
+            v.evaluate_input_model = False
         return v
 
     @validator("passes", pre=True, each_item=True)
@@ -161,12 +208,17 @@ class RunConfig(ConfigBase):
         if "engine" not in values:
             raise ValueError("Invalid engine")
 
+        disable_search = v.get("disable_search")
         if not values["engine"].search_strategy:
-            # disable search if search_strategy is None/False/{}, user cannot override
-            disable_search = True
+            if disable_search is False:
+                raise ValueError("You cannot set disable_search is False if search strategy is None/False/{}")
+            # disable search if search_strategy is None/False/{}, user cannot override it.
+            # If user explicitly set, raise error when disable_search is False and search_strategy is None/False/{}
+            if disable_search is None:
+                disable_search = True
         else:
             # disable search if user explicitly set disable_search to True
-            disable_search = v.get("disable_search", False)
+            disable_search = disable_search or False
 
         v["disable_search"] = disable_search
         pass_cls = Pass.registry.get(v["type"].lower(), None)
@@ -174,7 +226,10 @@ class RunConfig(ConfigBase):
             if not v.get("config"):
                 return v
 
+            searchable_configs = set()
             for param_name in v["config"]:
+                if v["config"][param_name] == PassParamDefault.SEARCHABLE_VALUES:
+                    searchable_configs.add(param_name)
                 if param_name.endswith("data_config"):
                     # we won't auto insert the input model data config for pass
                     # user must explicitly set the data config to INPUT_MODEL_DATA_CONFIG if needed
@@ -185,6 +240,13 @@ class RunConfig(ConfigBase):
                 if _have_aml_client(data_dir_config, values):
                     data_dir_config["config"]["azureml_client"] = values["azureml_client"]
                 v["config"]["data_dir"] = data_dir_config
+
+            if disable_search and searchable_configs:
+                raise ValueError(
+                    f"You cannot disable search for {v['type']} and"
+                    f" set {searchable_configs} to SEARCHABLE_VALUES at the same time."
+                    " Please remove SEARCHABLE_VALUES or enable search(needs search strategy configs)."
+                )
         return v
 
 

@@ -16,7 +16,7 @@ from olive.data.config import DataComponentConfig, DataConfig
 from olive.data.registry import Registry
 from olive.evaluator.metric import Metric, MetricType
 from olive.evaluator.metric_config import MetricGoal
-from olive.model import ModelConfig, ONNXModel, OptimumModel, PyTorchModel
+from olive.model import ModelConfig, ONNXModelHandler, PyTorchModelHandler
 from olive.passes.olive_pass import create_pass_from_dict
 from olive.passes.onnx import OnnxConversion, OnnxDynamicQuantization
 
@@ -73,30 +73,24 @@ def get_pytorch_model_config():
 
 
 def get_pytorch_model():
-    return PyTorchModel(
+    return PyTorchModelHandler(
         model_loader=pytorch_model_loader,
         model_path=None,
         io_config={"input_names": ["input"], "output_names": ["output"], "input_shapes": [(1, 1)]},
     )
 
 
-def get_optimum_model_by_model_path():
-    return OptimumModel(
-        model_path="hf-internal-testing/tiny-random-gptj",
-        model_components=["model.onnx"],
-        hf_config={"model_class": "text-generation"},
-    )
-
-
-def get_optimum_model_by_hf_config():
-    return OptimumModel(
-        model_components=["model.onnx"],
-        hf_config={"model_name": "hf-internal-testing/tiny-random-gptj", "model_class": "text-generation"},
+def get_hf_model():
+    return PyTorchModelHandler(
+        hf_config={
+            "model_name": "hf-internal-testing/tiny-random-gptj",
+            "task": "text-generation",
+        }
     )
 
 
 def get_hf_model_with_past():
-    return PyTorchModel(
+    return PyTorchModelHandler(
         hf_config={
             "model_name": "hf-internal-testing/tiny-random-gptj",
             "task": "text-generation",
@@ -105,7 +99,7 @@ def get_hf_model_with_past():
     )
 
 
-def get_pytorch_model_dummy_input(model):
+def get_pytorch_model_dummy_input(model=None):
     return torch.randn(1, 1)
 
 
@@ -122,7 +116,7 @@ def get_onnx_model_config():
 
 
 def get_onnx_model():
-    return ONNXModel(model_path=str(ONNX_MODEL_PATH))
+    return ONNXModelHandler(model_path=str(ONNX_MODEL_PATH))
 
 
 def delete_onnx_model_files():
@@ -150,14 +144,21 @@ def create_fixed_dataloader(datadir, batchsize, *args, **kwargs):
     return DataLoader(FixedDummyDataset(1))
 
 
-def get_accuracy_metric(*acc_subtype, random_dataloader=True, user_config=None, backend="torch_metrics"):
+def get_accuracy_metric(
+    *acc_subtype,
+    random_dataloader=True,
+    user_config=None,
+    backend="torch_metrics",
+    goal_type="threshold",
+    goal_value=0.99,
+):
     accuracy_metric_config = {"dataloader_func": create_dataloader if random_dataloader else create_fixed_dataloader}
-    accuracy_score_metric_config = {"mdmc_average": "global"}
+    accuracy_score_metric_config = {"task": "multiclass", "num_classes": 10}
     sub_types = [
         {
             "name": sub,
             "metric_config": accuracy_score_metric_config if sub == "accuracy_score" else {},
-            "goal": MetricGoal(type="threshold", value=0.99),
+            "goal": MetricGoal(type=goal_type, value=goal_value),
         }
         for sub in acc_subtype
     ]
@@ -171,24 +172,18 @@ def get_accuracy_metric(*acc_subtype, random_dataloader=True, user_config=None, 
     )
 
 
-def get_custom_eval():
+def get_custom_metric(user_config=None):
     user_script_path = str(Path(__file__).absolute().parent / "assets" / "user_script.py")
     return Metric(
         name="custom",
         type=MetricType.CUSTOM,
         sub_types=[{"name": "custom"}],
-        user_config={"evaluate_func": "eval_func", "user_script": user_script_path, "need_inference": False},
+        user_config=user_config or {"evaluate_func": "eval_func", "user_script": user_script_path},
     )
 
 
-def get_custom_metric():
-    custom_metric = get_custom_eval()
-    custom_metric.user_config.metric_func = "metric_func"
-    return custom_metric
-
-
 def get_custom_metric_no_eval():
-    custom_metric = get_custom_eval()
+    custom_metric = get_custom_metric()
     custom_metric.user_config.evaluate_func = None
     return custom_metric
 
@@ -201,6 +196,17 @@ def get_latency_metric(*lat_subtype, user_config=None):
         type=MetricType.LATENCY,
         sub_types=sub_types,
         user_config=user_config or latency_metric_config,
+    )
+
+
+def get_throughput_metric(*lat_subtype, user_config=None):
+    metric_config = {"dataloader_func": create_dataloader}
+    sub_types = [{"name": sub} for sub in lat_subtype]
+    return Metric(
+        name="throughput",
+        type=MetricType.THROUGHPUT,
+        sub_types=sub_types,
+        user_config=user_config or metric_config,
     )
 
 
@@ -220,20 +226,16 @@ def get_onnx_dynamic_quantization_pass(disable_search=False):
 
 def get_data_config():
     @Registry.register_dataset("test_dataset")
-    def _test_dataset(data_dir, test_value):
-        ...
+    def _test_dataset(data_dir, test_value): ...
 
     @Registry.register_dataloader()
-    def _test_dataloader(dataset, test_value):
-        ...
+    def _test_dataloader(dataset, test_value): ...
 
     @Registry.register_pre_process()
-    def _pre_process(dataset, test_value):
-        ...
+    def _pre_process(dataset, test_value): ...
 
     @Registry.register_post_process()
-    def _post_process(output, test_value):
-        ...
+    def _post_process(output, test_value): ...
 
     return DataConfig(
         components={

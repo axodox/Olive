@@ -4,13 +4,14 @@
 # --------------------------------------------------------------------------
 
 import tempfile
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
 
 from olive.engine.footprint import Footprint
 
-# pylint: disable=attribute-defined-outside-init
+# pylint: disable=attribute-defined-outside-init, protected-access
 
 
 class TestFootprint:
@@ -45,6 +46,14 @@ class TestFootprint:
         assert len(pareto_frontier_fp.nodes) == 2
         assert all(v.is_pareto_frontier for v in pareto_frontier_fp.nodes.values())
 
+    def test_empty_pareto_frontier(self):
+        # set all `is_goals_met` as false
+        unmet_goals_nodes = deepcopy(self.fp.nodes)
+        for v in unmet_goals_nodes.values():
+            v.metrics.if_goals_met = False
+        new_fp = Footprint(nodes=unmet_goals_nodes)
+        assert new_fp.create_pareto_frontier() is None
+
     def test_trace_back_run_history(self):
         for model_id in self.fp.nodes:
             run_history = self.fp.trace_back_run_history(model_id)
@@ -68,7 +77,7 @@ class TestFootprint:
                 "accuracy-accuracy_score": {"higher_is_better": True, "priority": 1},
                 "latency-avg": {"higher_is_better": False, "priority": 2},
             }
-            self.fp.plot_pareto_frontier(
+            self.fp._plot_pareto_frontier(
                 is_show=False,
                 save_path=Path(tempdir) / "pareto_frontier.html",
             )

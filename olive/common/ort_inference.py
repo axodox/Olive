@@ -2,8 +2,11 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 # --------------------------------------------------------------------------
+import logging
 from pathlib import Path
 from typing import Dict, Union
+
+logger = logging.getLogger(__name__)
 
 
 def get_ort_inference_session(
@@ -19,6 +22,7 @@ def get_ort_inference_session(
 
         sess_options.register_custom_ops_library(get_library_path())
 
+    logger.debug(f"inference_settings: {inference_settings}")
     # execution provider
     execution_provider = inference_settings.get("execution_provider")
 
@@ -26,9 +30,12 @@ def get_ort_inference_session(
     session_options = inference_settings.get("session_options", {})
     inter_op_num_threads = session_options.get("inter_op_num_threads")
     intra_op_num_threads = session_options.get("intra_op_num_threads")
+    enable_profiling = session_options.get("enable_profiling", False)
     execution_mode = session_options.get("execution_mode")
     graph_optimization_level = session_options.get("graph_optimization_level")
     extra_session_config = session_options.get("extra_session_config")
+    if enable_profiling:
+        sess_options.enable_profiling = True
     if inter_op_num_threads:
         sess_options.inter_op_num_threads = inter_op_num_threads
     if intra_op_num_threads:
@@ -44,11 +51,12 @@ def get_ort_inference_session(
         for key, value in extra_session_config.items():
             sess_options.add_session_config_entry(key, value)
 
-    if isinstance(execution_provider, list):
-        # execution_provider may be a list of tuples/lists where the first item in each tuple is the EP name
-        execution_provider = [i[0] if isinstance(i, (tuple, list)) else i for i in execution_provider]
-    elif isinstance(execution_provider, str):
+    if isinstance(execution_provider, str):
         execution_provider = [execution_provider]
+    else:
+        # execution providers should be list[str]
+        assert isinstance(execution_provider, list)
+        assert all(isinstance(ep, str) for ep in execution_provider)
 
     for idx, ep in enumerate(execution_provider):
         if ep == "QNNExecutionProvider":

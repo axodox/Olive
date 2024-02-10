@@ -13,7 +13,8 @@ import onnx
 from olive.cache import get_local_path_from_root
 from olive.common.utils import hash_string
 from olive.hardware import AcceleratorSpec
-from olive.model import ONNXModel
+from olive.model import ONNXModelHandler
+from olive.model.utils import resolve_onnx_path
 from olive.passes import Pass
 from olive.passes.onnx.common import get_external_data_config, model_proto_to_file, model_proto_to_olive_model
 from olive.passes.pass_config import ParamCategory, PassConfigParam
@@ -49,6 +50,10 @@ vai_q_onnx_quantization_config = {
             Function/function name to generate dataloader for calibration,
             required'
         """,
+    ),
+    "dataloader_func_kwargs": PassConfigParam(
+        type_=Dict[str, Any],
+        description="Keyword arguments for dataloader_func.",
     ),
     "weight_type": PassConfigParam(
         type_=str,
@@ -253,8 +258,8 @@ class VitisAIQuantization(Pass):
         return config
 
     def _run_for_config(
-        self, model: ONNXModel, data_root: str, config: Dict[str, Any], output_model_path: str
-    ) -> ONNXModel:
+        self, model: ONNXModelHandler, data_root: str, config: Dict[str, Any], output_model_path: str
+    ) -> ONNXModelHandler:
         from onnxruntime.quantization.quant_utils import QuantFormat, QuantType
 
         from olive.passes.onnx.vitis_ai import quantize_static
@@ -263,7 +268,7 @@ class VitisAIQuantization(Pass):
         # start with a copy of the config
         run_config = deepcopy(config)
 
-        output_model_path = ONNXModel.resolve_path(output_model_path)
+        output_model_path = resolve_onnx_path(output_model_path, Path(model.model_path).name)
 
         # extra config
         extra_options = deepcopy(config["extra_options"]) if config["extra_options"] else {}
@@ -293,7 +298,7 @@ class VitisAIQuantization(Pass):
                 model = self._quant_preprocess(model, preprocessed_temp_model_path)
             else:
                 logger.info("Already processed model for quantization, skipping preprocessing")
-                model = ONNXModel(LocalFile({"path": preprocessed_temp_model_path}))
+                model = ONNXModelHandler(LocalFile({"path": preprocessed_temp_model_path}))
 
         # keys not needed for quantization
         to_delete = [
@@ -304,6 +309,7 @@ class VitisAIQuantization(Pass):
             "data_dir",
             "batch_size",
             "dataloader_func",
+            "dataloader_func_kwargs",
         ]
         to_delete += list(get_external_data_config().keys())
 
@@ -340,6 +346,7 @@ class VitisAIQuantization(Pass):
                 config["dataloader_func"],
                 data_dir,
                 config["batch_size"],
+                **(config["dataloader_func_kwargs"] or {}),
             )
         elif self._data_config:
             dataloader = self._data_config.to_data_container().create_calibration_dataloader(data_root)
@@ -361,7 +368,7 @@ class VitisAIQuantization(Pass):
         # save the model to the output path and return the model
         return model_proto_to_olive_model(onnx_model, output_model_path, config)
 
-    def _quant_preprocess(self, model: ONNXModel, output_model_path: str) -> ONNXModel:
+    def _quant_preprocess(self, model: ONNXModelHandler, output_model_path: str) -> ONNXModelHandler:
         from onnxruntime.quantization.preprocess import quant_pre_process
 
         try:
@@ -387,4 +394,4 @@ class VitisAIQuantization(Pass):
             )
 
         # since this is only used internally, we will just treat it as a model file
-        return ONNXModel(LocalFile({"path": output_model_path}))
+        return ONNXModelHandler(LocalFile({"path": output_model_path}))

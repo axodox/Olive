@@ -10,9 +10,10 @@ from typing import Dict, Optional, Union
 import numpy as np
 
 from olive.hardware import Device
-from olive.model import SNPEModel
-from olive.snpe import SNPEProcessedDataLoader
-from olive.snpe.utils.local import get_snpe_target_arch
+from olive.model import SNPEModelHandler
+from olive.platform_sdk.qualcomm.constants import SDKTargetDevice
+from olive.platform_sdk.qualcomm.snpe.env import SNPESDKEnv
+from olive.platform_sdk.qualcomm.utils.data_loader import FileListProcessedDataLoader
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ def evaluate(model: str, config: Union[str, Dict], data: str, input_list_file: O
         config (str): Either the path of json config file or an already loaded json file as a `dict`.
         data (str): Path to the evaluation data.
         input_list_file (str, optional): Name of input list file. Optional if it is 'input_list.txt'.
+
     """
     data_dir = Path(data).resolve()
     if isinstance(config, str):
@@ -32,11 +34,11 @@ def evaluate(model: str, config: Union[str, Dict], data: str, input_list_file: O
             config = json.load(f)
 
     # SNPE Model
-    model = SNPEModel(model_path=model, **config["io_config"])
+    model = SNPEModelHandler(model_path=model, **config["io_config"])
 
     # Devices to evaluate on
     devices = [Device.CPU]
-    if get_snpe_target_arch() == "ARM64-Windows":
+    if SNPESDKEnv().target_arch == SDKTargetDevice.arm64x_windows:
         devices.append(Device.NPU)
 
     config["inference_settings"]["return_numpy_results"] = True
@@ -44,7 +46,7 @@ def evaluate(model: str, config: Union[str, Dict], data: str, input_list_file: O
     # devices.append(Device.NPU)
 
     # Data
-    data = SNPEProcessedDataLoader(data_dir, input_list_file=input_list_file)
+    data = FileListProcessedDataLoader(data_dir, input_list_file=input_list_file)
     input_list = data.get_input_list()
 
     # Run inference

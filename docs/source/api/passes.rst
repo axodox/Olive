@@ -12,11 +12,11 @@ OnnxConversion
 --------------
 .. autoconfigclass:: olive.passes.OnnxConversion
 
-.. _device_specific_onnx_conversion:
+.. _onnx_op_version_conversion:
 
-DeviceSpecificOnnxConversion
-----------------------------
-.. autoconfigclass:: olive.passes.DeviceSpecificOnnxConversion
+OnnxOpVersionConversion
+-----------------------
+.. autoconfigclass:: olive.passes.OnnxOpVersionConversion
 
 .. _onnx_model_optimizer:
 
@@ -96,18 +96,30 @@ InsertBeamSearch
 --------------------
 .. autoconfigclass:: olive.passes.InsertBeamSearch
 
+.. _lora:
+
+LoRA
+-----
+.. autoconfigclass:: olive.passes.LoRA
+
 .. _qlora:
 
 QLoRA
--------------------------
+------
 .. autoconfigclass:: olive.passes.QLoRA
 
-.. _qlora_hf_training_arguments:
+.. _loftq:
 
-QLoRA HFTrainingArguments
-~~~~~~~~~~~~~~~~~~~~~~~~~
+LoftQ
+-----
+.. autoconfigclass:: olive.passes.LoftQ
 
-.. autopydantic_settings:: olive.passes.pytorch.qlora.HFTrainingArguments
+.. _lora_hf_training_arguments:
+
+LoRA/QLoRA/LoftQ HFTrainingArguments
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autopydantic_settings:: olive.passes.pytorch.lora.HFTrainingArguments
 
 .. _quantization_aware_training:
 

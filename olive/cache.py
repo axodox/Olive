@@ -78,8 +78,8 @@ def _delete_run(run_id: str, cache_dir: Union[str, Path] = ".olive-cache"):
         # output model and children
         output_model_number = run_data["output_model_id"].split("_")[0]
         _delete_model(output_model_number, cache_dir)
-    except Exception as e:
-        logger.exception(e)
+    except Exception:
+        logger.exception("delete model failed.")
     finally:
         run_json.unlink()
 
@@ -215,7 +215,7 @@ def save_model(
     with model_jsons[0].open("r") as f:
         model_json = serialize_to_json(json.load(f))
 
-    if model_json["type"].lower() in ["compositeonnxmodel", "distributedonnxmodel"]:
+    if model_json["type"].lower() in ("compositemodel", "compositepytorchmodel"):
         logger.warning(f"Saving models of type '{model_json['type']}' is not supported yet.")
         return None
 

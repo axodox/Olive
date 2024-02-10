@@ -49,9 +49,9 @@
         },
         "optimize": {
             "type": "OrtTransformersOptimization",
-            "disable_search": true,
             "config": {
                 "model_type": "vae",
+                "opt_level": 0,
                 "float16": true,
                 "use_gpu": true,
                 "keep_io_types": false,
@@ -74,20 +74,50 @@
                     "enable_packed_qkv": true,
                     "enable_packed_kv": true,
                     "enable_bias_add": false,
-                    "group_norm_channels_last": false,
-                    "force_fp16_inputs": {
-                        "GroupNorm": [0, 1, 2]
-                    }
+                    "group_norm_channels_last": false
                 },
-                "force_fp32_ops": ["RandomNormalLike"]
+                "force_fp32_ops": ["RandomNormalLike"],
+                "force_fp32_nodes": [
+                    "/decoder/up_blocks.2/upsamplers.0/conv/Conv",
+                    "/decoder/up_blocks.3/resnets.0/conv_shortcut/Conv",
+                    "GroupNorm_22",
+                    "/decoder/up_blocks.3/resnets.0/conv1/Conv",
+                    "GroupNorm_23",
+                    "/decoder/up_blocks.3/resnets.0/conv2/Conv",
+                    "/decoder/up_blocks.3/resnets.0/Add",
+                    "GroupNorm_24",
+                    "/decoder/up_blocks.3/resnets.1/conv1/Conv",
+                    "GroupNorm_25",
+                    "/decoder/up_blocks.3/resnets.1/conv2/Conv",
+                    "/decoder/up_blocks.3/resnets.1/Add",
+                    "GroupNorm_26",
+                    "/decoder/up_blocks.3/resnets.2/conv1/Conv",
+                    "GroupNorm_27",
+                    "/decoder/up_blocks.3/resnets.2/conv2/Conv",
+                    "/decoder/up_blocks.3/resnets.2/Add",
+                    "GroupNorm_28",
+                    "/decoder/conv_out/Conv",
+                    "graph_output_cast0"
+                ],
+                "force_fp16_inputs": {
+                    "GroupNorm": [0, 1, 2]
+                }
+            }
+        },
+        "optimize_cuda": {
+            "type": "OrtTransformersOptimization",
+            "config": {
+                "model_type": "vae",
+                "opt_level": 0,
+                "float16": false,
+                "use_gpu": true
             }
         }
     },
+    "pass_flows": [
+        ["convert", "optimize"]
+    ],
     "engine": {
-        "search_strategy": {
-            "execution_order": "joint",
-            "search_algorithm": "exhaustive"
-        },
         "evaluator": "common_evaluator",
         "evaluate_input_model": false,
         "host": "local_system",
