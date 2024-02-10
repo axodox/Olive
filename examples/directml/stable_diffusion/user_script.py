@@ -212,7 +212,7 @@ def controlnet_conversion_inputs(model):
     return tuple(controlnet_inputs(1, torch.float32).values())
 
 
-def controlnet_data_loader(data_dir, batchsize):
+def controlnet_data_loader(data_dir, batchsize, *args, **kwargs):
     return RandomDataLoader(controlnet_inputs, batchsize, torch.float16)
 
 # -----------------------------------------------------------------------------
@@ -284,7 +284,7 @@ def controlnet_unet_conversion_inputs(model):
     return tuple(controlnet_unet_inputs(1, torch.float32).values())
 
 
-def controlnet_unet_data_loader(data_dir, batchsize):
+def controlnet_unet_data_loader(data_dir, batchsize, *args, **kwargs):
     return RandomDataLoader(controlnet_unet_inputs, batchsize, torch.float16)
 
 # -----------------------------------------------------------------------------
